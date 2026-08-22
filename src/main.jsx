@@ -16,6 +16,7 @@ class AppErrorBoundary extends Component{state={error:null};static getDerivedSta
 function App(){
  const[user,setUser]=useState(null),[tasks,setTasks]=useState([]),[goals,setGoals]=useState([]),[tab,setTab]=useState(location.hash==='#planner'?'planner':'home');
  const[quote,setQuote]=useState(QUOTES[0]),[toast,setToast]=useState(''),[saving,setSaving]=useState(''),[timer,setTimer]=useState(1500),[running,setRunning]=useState(false),[hours,setHours]=useState(6);
+ const completed=tasks.filter(task=>task?.done).length;
  const flash=m=>{setToast(String(m||'Something went wrong'));setTimeout(()=>setToast(''),3500)};
  const load=async()=>{if(!supabase||!user)return;try{const[a,b]=await Promise.all([supabase.from('tasks').select('*').eq('user_id',user.id).eq('task_date',today()).order('scheduled_time'),supabase.from('monthly_goals').select('*').eq('user_id',user.id).eq('month_start',monthStart())]);if(a.error)flash(a.error.message);setTasks(a.data||[]);if(b.error)flash(b.error.message);setGoals(b.data||[])}catch(error){flash(error.message)}};
  useEffect(()=>{const sync=()=>setTab(location.hash==='#planner'?'planner':'home');sync();window.addEventListener('hashchange',sync);return()=>window.removeEventListener('hashchange',sync)},[]);
