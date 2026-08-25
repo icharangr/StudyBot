@@ -2,7 +2,7 @@ import React, { Component, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Check, Clock, Plus, Sparkles, Target, LayoutDashboard, MessageCircle,
-  Play, Pause, RotateCcw, AlarmClock, X, Send, Loader2, LogOut, Trash2,
+  Play, Pause, RotateCcw, AlarmClock, X, Send, Loader2, Trash2,
 } from 'lucide-react';
 import './styles.css';
 import { supabase } from './lib/supabase';
@@ -313,7 +313,7 @@ function App() {
       });
       const raw = await res.text();
       let data;
-      try { data = JSON.parse(raw); } catch { throw new Error('AI endpoint is not reachable here (are you running `vite dev` without Vercel? try `vercel dev` or a deployed URL).'); }
+      try { data = JSON.parse(raw); } catch { throw new Error('AI endpoint is not reachable here.'); }
       if (!res.ok) throw new Error(data.error || 'AI request failed');
       const ops = Array.isArray(data.operations) ? data.operations : [];
       const needsConfirmation = !!data.needs_confirmation;
@@ -345,7 +345,6 @@ function App() {
           <div className="quote" style={{ margin: 0, flex: 1 }}>{quote}</div>
           <div className="row" style={{ gap: 6 }}>
             <button type="button" className="icon-button" onClick={() => setQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)])}><Sparkles size={16} /></button>
-            {user && <button type="button" className="icon-button" onClick={() => supabase?.auth.signOut()}><LogOut size={16} /></button>}
           </div>
         </div>
         <div className="hero-row mt-8">
