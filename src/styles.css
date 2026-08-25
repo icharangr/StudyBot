@@ -52,7 +52,15 @@ input, select { font-size: 16px; }
   position: sticky; top: 0; z-index: 20; padding: calc(14px + var(--safe-top)) 14px 10px;
   background: rgba(255,255,255,.94); border-bottom: 1px solid var(--border-subtle); backdrop-filter: blur(18px);
 }
-.quote { color: var(--text-secondary); font-size: .78rem; line-height: 1.35; margin-bottom: 10px; }
+.quote-banner {
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; margin-bottom: 10px;
+  border-radius: 12px; border: 1px solid #bfdbfe;
+  background: linear-gradient(135deg, #eaf2ff, #dcebff);
+  box-shadow: 0 2px 10px rgba(37, 99, 235, .10);
+}
+.quote-banner .icon-button { width: 34px; height: 34px; min-height: 34px; background: #fff; flex: 0 0 auto; }
+.quote-icon { flex: 0 0 auto; color: #1d4ed8; }
+.quote { flex: 1; color: #163d68; font-size: .8rem; font-weight: 600; line-height: 1.35; margin: 0; }
 .hero-row, .row, .between, .center { display: flex; align-items: center; }
 .between { justify-content: space-between; gap: 10px; }
 .hero-row { gap: 12px; justify-content: space-between; }
@@ -92,7 +100,16 @@ input, select { font-size: 16px; }
 .mini-progress { height:4px; border-radius:999px; background:#dbeafe; overflow:hidden; }
 
 .task-list { display:grid; gap:10px; }
-.task-card { position:relative; display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:10px; padding:10px; min-height:72px; transition:transform .18s ease, background .18s ease, border-color .18s ease; }
+.task-swipe { position:relative; border-radius:12px; overflow:hidden; }
+.task-swipe-action {
+  position:absolute; inset:0; z-index:0; display:flex; align-items:center; justify-content:flex-end;
+  padding-right:18px; border-radius:12px; background:var(--accent-danger); color:#fff;
+}
+.task-card {
+  position:relative; z-index:1; display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:10px;
+  padding:10px; min-height:72px; background:var(--bg-card); touch-action:pan-y;
+  transition:transform .18s ease, background .18s ease, border-color .18s ease;
+}
 .task-card.done { border-color:rgba(37,99,235,.30); background:#eff6ff; opacity:.88; }
 .task-icon { width:42px; height:42px; display:grid; place-items:center; border-radius:10px; background:#eff6ff; border:1px solid var(--border-subtle); font-size:1.1rem; font-weight:700; }
 .task-name { font-weight:700; line-height:1.2; word-break:break-word; }
@@ -116,6 +133,15 @@ input, select { font-size: 16px; }
 .checkbox-button span { width:12px; height:12px; border-radius:50%; background:#a6bfd6; }
 .checkbox-button.checked { color:#fff; border-color:#1d4ed8; background:#2563eb; font-weight:800; box-shadow:0 4px 12px rgba(37,99,235,.24); }
 .checkbox-button:disabled { opacity:.70; }
+
+.duration-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.duration-chip {
+  min-height:36px; padding:6px 12px; border-radius:999px; border:1px solid var(--border-card);
+  background:#f7fbff; color:var(--text-primary); font-weight:700; font-size:.82rem;
+}
+.duration-chip.active { border-color:#1d4ed8; background:#2563eb; color:#fff; }
+.duration-custom { display:flex; align-items:center; gap:6px; margin-left:auto; }
+.duration-custom input { width:64px; min-height:36px; padding:6px 8px; border-radius:8px; border:1px solid var(--border-card); background:#fff; color:var(--text-primary); }
 
 .goal-card { border-left:4px solid var(--accent-study); }
 .goal-card.gate { border-left-color:var(--accent-gate); }
