@@ -7,12 +7,6 @@ import {
 import './styles.css';
 import { supabase } from './lib/supabase';
 
-/* ---------------------------------------------------------------
-   Date / time helpers
-   -----------------------------------------------------------------
-   today() uses the *local* wall-clock date (not toISOString(), which
-   is UTC). In IST that matters: anything before 05:30 local is still
-   "yesterday" in UTC, and the routine's first block starts at 04:30. */
 const pad = n => String(n).padStart(2, '0');
 const today = () => {
   const d = new Date();
@@ -20,10 +14,6 @@ const today = () => {
 };
 const monthStart = () => today().slice(0, 7) + '-01';
 const daysUntil = d => Math.max(0, Math.ceil((new Date(d) - new Date()) / 86400000));
-
-/* Postgres `time` columns come back as "HH:MM:SS"; the routine list
-   stores "HH:MM". normTime() makes both sides comparable so a routine
-   block's DB row is actually found instead of re-created each time. */
 const normTime = t => (t ? String(t).slice(0, 5) : null);
 
 const ROUTINE = [
@@ -77,8 +67,6 @@ class AppErrorBoundary extends Component {
   }
 }
 
-/* Bottom sheet used for adding tasks/goals — a proper multi-field
-   mobile form instead of window.prompt(). */
 function Sheet({ title, onClose, onSubmit, submitLabel = 'Save', children }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -113,7 +101,6 @@ function App() {
   const [taskForm, setTaskForm] = useState({ title: '', priority: 'Medium', tag: 'Personal', time: '' });
   const [goalForm, setGoalForm] = useState({ title: '', target: 1 });
 
-  // ---- chat state ----
   const [chatMessages, setChatMessages] = useState([
     { id: 'seed', role: 'bot', text: "Hey — I'm your StudyBot AI. Ask me to plan your day, move a block, or mark something done." },
   ]);
@@ -157,7 +144,6 @@ function App() {
 
   useEffect(() => { load(); }, [user]);
 
-  // Reload if the calendar date rolls over while the app stays open.
   useEffect(() => {
     let current = today();
     const id = setInterval(() => {
@@ -197,15 +183,6 @@ function App() {
     }
   };
 
-  /* ---------------------------------------------------------------
-     BUG FIX (count mismatch): "total" and "completed" must both be
-     measured against the SAME list. Previously the % used
-     `tasks.length` — which only counts rows already inserted in
-     Supabase — as the denominator, while the visible list showed all
-     11 routine blocks regardless of whether they'd been inserted yet.
-     Checking 3 of 11 boxes showed "100%" because only 3 rows existed.
-     Here, `allItems` is built once from the full routine + any manual
-     tasks, and every count/percentage in the app reads from it. */
   const manualItems = tasks.filter(t => !ROUTINE.some(r => r.title === t.title && normTime(t.scheduled_time) === r.start));
   const allItems = [
     ...ROUTINE.map(r => ({ key: r.title + r.start, title: r.title, time: r.time, tag: r.tag, tone: r.tone, icon: r.icon, routine: r, task: findRoutineTask(r) })),
@@ -292,12 +269,6 @@ function App() {
     if (!failed) flash('Daily routine is ready.');
   };
 
-  /* ---------------------------------------------------------------
-     AI chat — this actually calls /api/ai-task now (previously the
-     serverless function existed but nothing in the UI ever called
-     it). Requires GROQ_API_KEY set in your Vercel project env, and
-     only responds when served by Vercel (vercel dev / a deployment) —
-     plain `vite dev` doesn't run /api routes. */
   const applyOperations = async ops => {
     for (const op of ops) {
       try {
@@ -365,36 +336,7 @@ function App() {
     setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true } : m)));
     flash('Applied.');
   };
-  const dismissMessage = id => setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true, dismissed: true } : m)));
-
-  if (!user) {
-    return (
-      <div className="shell">
-        <main className="auth">
-          <div className="auth-mark">SB</div>
-          <h1>StudyBot<span>.</span></h1>
-          <p className="muted">Your personal study operating system.</p>
-          {!supabase ? (
-            <p className="muted">Supabase environment variables are missing.</p>
-          ) : (
-            <button
-              className="primary-button"
-              onClick={async () => {
-                const email = prompt('Enter your email');
-                if (email) {
-                  const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin } });
-                  flash(error ? error.message : 'Magic link sent');
-                }
-              }}
-            >
-              Continue with magic link
-            </button>
-          )}
-        </main>
-        {toast && <div className="toast-stack"><div className="toast">{toast}</div></div>}
-      </div>
-    );
-  }
+  const dismissMessage = id => setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true, dismissed: true } : m));
 
   return (
     <div className="shell">
@@ -403,7 +345,7 @@ function App() {
           <div className="quote" style={{ margin: 0, flex: 1 }}>{quote}</div>
           <div className="row" style={{ gap: 6 }}>
             <button type="button" className="icon-button" onClick={() => setQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)])}><Sparkles size={16} /></button>
-            <button type="button" className="icon-button" onClick={() => supabase?.auth.signOut()}><LogOut size={16} /></button>
+            {user && <button type="button" className="icon-button" onClick={() => supabase?.auth.signOut()}><LogOut size={16} /></button>}
           </div>
         </div>
         <div className="hero-row mt-8">
