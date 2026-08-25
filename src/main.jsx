@@ -1,5 +1,4 @@
 import React, { Component, useEffect, useRef, useState } from 'react';
-import { createRoot } from 'react-dom/client';
 import {
   Check, Clock, Plus, Sparkles, Target, LayoutDashboard, MessageCircle,
   Play, Pause, RotateCcw, AlarmClock, X, Send, Loader2, Trash2,
@@ -87,6 +86,7 @@ function Sheet({ title, onClose, onSubmit, submitLabel = 'Save', children }) {
 
 function App() {
   const [user, setUser] = useState(null);
+  const [authReady, setAuthReady] = useState(!supabase);
   const [tasks, setTasks] = useState([]);
   const [goals, setGoals] = useState([]);
   const [tab, setTab] = useState('today');
@@ -110,6 +110,49 @@ function App() {
 
   const flash = m => { setToast(String(m || 'Something went wrong')); setTimeout(() => setToast(''), 3500); };
 
+  useEffect(() => {
+    if (!supabase) return;
+    let cancelled = false;
+    let subscription;
+
+    const bootstrap = async () => {
+      try {
+        const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
+        let session = sessionData?.session || null;
+
+        if (!session) {
+          const { data, error } = await supabase.auth.signInAnonymously();
+          if (error) throw error;
+          session = data?.session || null;
+        }
+
+        if (!cancelled) {
+          setUser(session?.user || null);
+          setAuthReady(true);
+        }
+      } catch (error) {
+        console.error('Anonymous session bootstrap failed', error);
+        if (!cancelled) {
+          setUser(null);
+          setAuthReady(true);
+          flash('Could not start a private StudyBot session.');
+        }
+      }
+    };
+
+    bootstrap();
+    const listener = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!cancelled) setUser(session?.user || null);
+    });
+    subscription = listener?.data?.subscription;
+
+    return () => {
+      cancelled = true;
+      subscription?.unsubscribe?.();
+    };
+  }, []);
+
   const load = async () => {
     if (!supabase || !user) return;
     try {
@@ -117,32 +160,16 @@ function App() {
         supabase.from('tasks').select('*').eq('user_id', user.id).eq('task_date', today()).order('scheduled_time'),
         supabase.from('monthly_goals').select('*').eq('user_id', user.id).eq('month_start', monthStart()),
       ]);
-      if (a.error) flash(a.error.message);
+      if (a.error) throw a.error;
+      if (b.error) throw b.error;
       setTasks(a.data || []);
-      if (b.error) flash(b.error.message);
       setGoals(b.data || []);
     } catch (error) {
       flash(error.message);
     }
   };
 
-  useEffect(() => {
-    if (!supabase) return;
-    let subscription;
-    try {
-      supabase.auth.getUser().then(({ data, error }) => {
-        if (error) console.warn(error);
-        setUser(data?.user || null);
-      }).catch(error => console.warn(error));
-      const listener = supabase.auth.onAuthStateChange((_e, session) => setUser(session?.user || null));
-      subscription = listener?.data?.subscription;
-    } catch (error) {
-      console.warn(error);
-    }
-    return () => subscription?.unsubscribe?.();
-  }, []);
-
-  useEffect(() => { load(); }, [user]);
+  useEffect(() => { if (authReady && user) load(); }, [authReady, user]);
 
   useEffect(() => {
     let current = today();
@@ -169,18 +196,24 @@ function App() {
     if (!supabase || !user) return null;
     const existing = findRoutineTask(r);
     if (existing) return existing;
-    try {
-      const { data, error } = await supabase.from('tasks').insert({
-        user_id: user.id, title: r.title, task_date: today(), scheduled_time: r.start,
-        priority: r.priority, tag: r.tag, source: ROUTINE_SOURCE, done: false,
-      }).select().single();
-      if (error) { flash(error.message); return null; }
-      setTasks(v => [...v, data].sort((a, b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || '')));
-      return data;
-    } catch (error) {
+
+    const { data, error } = await supabase.from('tasks').insert({
+      user_id: user.id,
+      title: r.title,
+      task_date: today(),
+      scheduled_time: r.start,
+      priority: r.priority,
+      tag: r.tag,
+      source: ROUTINE_SOURCE,
+      done: false,
+    }).select().single();
+
+    if (error) {
       flash(error.message);
       return null;
     }
+    setTasks(v => [...v, data].sort((a, b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || '')));
+    return data;
   };
 
   const manualItems = tasks.filter(t => !ROUTINE.some(r => r.title === t.title && normTime(t.scheduled_time) === r.start));
@@ -195,20 +228,30 @@ function App() {
   const toggleItem = async item => {
     if (saving || !supabase || !user) return;
     setSaving('task');
+    let task = item.task;
+    const previousDone = task?.done ?? false;
+
     try {
-      let task = item.task;
       if (!task && item.routine) task = await ensureTask(item.routine);
-      if (!task) return;
-      const next = !task.done;
+      if (!task) throw new Error('Task could not be created.');
+
+      const next = !previousDone;
       setTasks(v => v.map(t => (t.id === task.id ? { ...t, done: next } : t)));
-      const { error } = await supabase.from('tasks')
+
+      const { data, error } = await supabase.from('tasks')
         .update({ done: next, completed_at: next ? new Date().toISOString() : null })
         .eq('id', task.id)
-        .eq('user_id', user.id);
+        .eq('user_id', user.id)
+        .select('id,done,completed_at')
+        .single();
+
       if (error) throw error;
+      setTasks(v => v.map(t => (t.id === data.id ? { ...t, ...data } : t)));
       flash(next ? 'Task completed ✓' : 'Task reopened');
     } catch (error) {
-      setTasks(v => v.map(t => (t.id === item.task?.id ? { ...t, done: !t.done } : t)));
+      if (task) {
+        setTasks(v => v.map(t => (t.id === task.id ? { ...t, done: previousDone } : t)));
+      }
       flash('Could not save task: ' + error.message);
     } finally {
       setSaving('');
@@ -239,7 +282,7 @@ function App() {
     if (!title || !supabase || !user) return;
     const target = Math.max(1, Number(goalForm.target) || 1);
     const { error } = await supabase.from('monthly_goals').insert({
-      user_id: user.id, month_start: monthStart(), title, target_units: target, completed_units: 0, color: 'lime',
+      user_id: user.id, month_start: monthStart(), title, target_units: target, completed_units: 0, color: 'blue',
     });
     if (error) flash(error.message); else { flash('Goal added'); load(); }
     setShowAddGoal(false);
@@ -274,23 +317,30 @@ function App() {
     for (const op of ops) {
       try {
         if (op.op === 'create') {
-          await supabase.from('tasks').insert({
+          const { error } = await supabase.from('tasks').insert({
             user_id: user.id, title: op.title, task_date: op.task_date || today(),
             scheduled_time: op.time || null, priority: op.priority || 'Medium',
             tag: op.tag || 'Personal', source: 'ai', done: false,
           });
+          if (error) throw error;
         } else if (op.op === 'update') {
           const patch = {};
           if (op.new_title) patch.title = op.new_title;
           if (op.priority) patch.priority = op.priority;
           if (op.tag) patch.tag = op.tag;
-          if (Object.keys(patch).length) await supabase.from('tasks').update(patch).eq('id', op.task_id).eq('user_id', user.id);
+          if (Object.keys(patch).length) {
+            const { error } = await supabase.from('tasks').update(patch).eq('id', op.task_id).eq('user_id', user.id);
+            if (error) throw error;
+          }
         } else if (op.op === 'reschedule') {
-          await supabase.from('tasks').update({ task_date: op.task_date, scheduled_time: op.time || null }).eq('id', op.task_id).eq('user_id', user.id);
+          const { error } = await supabase.from('tasks').update({ task_date: op.task_date, scheduled_time: op.time || null }).eq('id', op.task_id).eq('user_id', user.id);
+          if (error) throw error;
         } else if (op.op === 'delete') {
-          await supabase.from('tasks').delete().eq('id', op.task_id).eq('user_id', user.id);
+          const { error } = await supabase.from('tasks').delete().eq('id', op.task_id).eq('user_id', user.id);
+          if (error) throw error;
         } else if (op.op === 'complete') {
-          await supabase.from('tasks').update({ done: true, completed_at: new Date().toISOString() }).eq('id', op.task_id).eq('user_id', user.id);
+          const { error } = await supabase.from('tasks').update({ done: true, completed_at: new Date().toISOString() }).eq('id', op.task_id).eq('user_id', user.id);
+          if (error) throw error;
         }
       } catch (e) {
         flash('AI action failed: ' + e.message);
@@ -339,6 +389,18 @@ function App() {
   };
   const dismissMessage = id => setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true, dismissed: true } : m)));
 
+  if (!authReady) {
+    return (
+      <div className="shell">
+        <main className="auth loading-screen">
+          <div className="auth-mark"><Loader2 className="spin" size={22} /></div>
+          <h1>StudyBot<span>.</span></h1>
+          <p className="muted">Preparing your private study space…</p>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="shell">
       <div className="top-panel">
@@ -383,7 +445,7 @@ function App() {
                       <div className="pill-row">
                         <span className={`pill cat-${item.tone}`}>{item.tag}</span>
                         {!item.routine && (
-                          <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => deleteTask(item.task.id)}>
+                          <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => deleteTask(item.task.id)} aria-label={`Delete ${item.title}`}>
                             <Trash2 size={12} />
                           </button>
                         )}
@@ -392,7 +454,7 @@ function App() {
                     <div className="check-wrap">
                       <button
                         type="button"
-                        disabled={saving === 'task'}
+                        disabled={saving === 'task' || !user}
                         aria-pressed={done}
                         aria-label={done ? `Mark ${item.title} as not done` : `Mark ${item.title} as done`}
                         className={`checkbox-button ${done ? 'checked' : ''}`}
@@ -423,9 +485,9 @@ function App() {
                 const done = Number(goal.completed_units || 0) >= target;
                 const pct = done ? 100 : Math.round((Number(goal.completed_units || 0) / target) * 100);
                 return (
-                  <div className={`goal-card ${goal.color === 'lime' ? 'gate' : ''}`} key={goal.id}>
+                  <div className={`goal-card ${goal.color === 'blue' ? 'gate' : ''}`} key={goal.id}>
                     <div className="row" style={{ gap: 10 }}>
-                      <button type="button" disabled={saving === goal.id} className={`checkbox-button ${done ? 'checked' : ''}`} aria-pressed={done} onClick={() => toggleGoal(goal)}>
+                      <button type="button" disabled={saving === goal.id || !user} className={`checkbox-button ${done ? 'checked' : ''}`} aria-pressed={done} onClick={() => toggleGoal(goal)}>
                         {done ? <Check size={18} /> : <span />}
                       </button>
                       <div style={{ flex: 1 }}>

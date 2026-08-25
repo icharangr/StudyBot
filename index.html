@@ -1,10 +1,14 @@
-import{createClient}from'@supabase/supabase-js';const url=import.meta.env.VITE_SUPABASE_URL,key=import.meta.env.VITE_SUPABASE_ANON_KEY;export const supabase=url&&key?createClient(url,key):null;
-
-// StudyBot does not require user sign-in. When Supabase is configured,
-// create an anonymous session automatically so the existing RLS policies
-// can still isolate each browser's tasks/goals without an email or login.
-if(supabase){
-  supabase.auth.getSession().then(async({data})=>{
-    if(!data?.session){await supabase.auth.signInAnonymously().catch(error=>console.warn('Anonymous session unavailable:',error));}
-  }).catch(error=>console.warn('Auth bootstrap unavailable:',error));
-}
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#2563eb" />
+    <title>StudyBot</title>
+    <link rel="manifest" href="/manifest.json" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
