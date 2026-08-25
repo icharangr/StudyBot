@@ -336,7 +336,7 @@ function App() {
     setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true } : m)));
     flash('Applied.');
   };
-  const dismissMessage = id => setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true, dismissed: true } : m));
+  const dismissMessage = id => setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true, dismissed: true } : m)));
 
   return (
     <div className="shell">
