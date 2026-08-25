@@ -84,6 +84,89 @@ function Sheet({ title, onClose, onSubmit, submitLabel = 'Save', children }) {
   );
 }
 
+const SWIPE_TRIGGER = 72;
+const SWIPE_MAX = 96;
+
+function TaskRow({ item, done, disabled, onToggle, onDelete }) {
+  const [dragX, setDragX] = useState(0);
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const startY = useRef(0);
+  const locked = useRef(null); // 'x' | 'y' | null while deciding gesture direction
+  const canSwipe = !item.routine && !!item.task;
+
+  const onPointerDown = e => {
+    if (!canSwipe) return;
+    dragging.current = true;
+    locked.current = null;
+    startX.current = e.clientX;
+    startY.current = e.clientY;
+  };
+  const onPointerMove = e => {
+    if (!canSwipe || !dragging.current) return;
+    const dx = e.clientX - startX.current;
+    const dy = e.clientY - startY.current;
+    if (!locked.current) {
+      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+      locked.current = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    }
+    if (locked.current !== 'x') return;
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    setDragX(Math.min(0, Math.max(dx, -SWIPE_MAX)));
+  };
+  const endDrag = () => {
+    if (!canSwipe) return;
+    dragging.current = false;
+    if (locked.current === 'x' && dragX <= -SWIPE_TRIGGER) onDelete(item.task.id);
+    setDragX(0);
+    locked.current = null;
+  };
+
+  return (
+    <div className="task-swipe">
+      {canSwipe && (
+        <div className="task-swipe-action" style={{ opacity: Math.min(1, -dragX / SWIPE_TRIGGER) }}>
+          <Trash2 size={18} />
+        </div>
+      )}
+      <div
+        className={`task-card ${done ? 'done' : ''}`}
+        style={{ transform: dragX ? `translateX(${dragX}px)` : undefined, transition: dragging.current ? 'none' : 'transform .2s ease' }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <div className="task-icon">{item.icon}</div>
+        <div>
+          <div className="task-name">{item.title}</div>
+          <div className="task-time">{item.time}</div>
+          <div className="pill-row">
+            <span className={`pill cat-${item.tone}`}>{item.tag}</span>
+            {!item.routine && (
+              <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => onDelete(item.task.id)} aria-label={`Delete ${item.title}`}>
+                <Trash2 size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="check-wrap">
+          <button
+            type="button"
+            disabled={disabled}
+            aria-pressed={done}
+            aria-label={done ? `Mark ${item.title} as not done` : `Mark ${item.title} as done`}
+            className={`checkbox-button ${done ? 'checked' : ''}`}
+            onClick={() => onToggle(item)}
+          >
+            {done ? <Check size={18} /> : <span />}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [user, setUser] = useState(null);
   const [authReady, setAuthReady] = useState(!supabase);
@@ -93,7 +176,8 @@ function App() {
   const [quote, setQuote] = useState(QUOTES[Math.floor(Math.random() * QUOTES.length)]);
   const [toast, setToast] = useState('');
   const [saving, setSaving] = useState('');
-  const [timer, setTimer] = useState(1500);
+  const [focusMinutes, setFocusMinutes] = useState(25);
+  const [timer, setTimer] = useState(25 * 60);
   const [running, setRunning] = useState(false);
   const [hours, setHours] = useState(6);
   const [showAddTask, setShowAddTask] = useState(false);
@@ -190,6 +274,12 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [chatMessages, chatLoading, tab]);
 
+  const setFocusDuration = mins => {
+    const clamped = Math.min(180, Math.max(1, Math.round(Number(mins) || 0)));
+    setFocusMinutes(clamped);
+    if (!running) setTimer(clamped * 60);
+  };
+
   const findRoutineTask = r => tasks.find(t => t.title === r.title && normTime(t.scheduled_time) === r.start);
 
   const ensureTask = async r => {
@@ -226,7 +316,9 @@ function App() {
   const completionPct = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
 
   const toggleItem = async item => {
-    if (saving || !supabase || !user) return;
+    if (saving) return;
+    if (!supabase) return;
+    if (!user) { flash('Still connecting — give it a second and tap again.'); return; }
     setSaving('task');
     let task = item.task;
     const previousDone = task?.done ?? false;
@@ -404,11 +496,10 @@ function App() {
   return (
     <div className="shell">
       <div className="top-panel">
-        <div className="between">
-          <div className="quote" style={{ margin: 0, flex: 1 }}>{quote}</div>
-          <div className="row" style={{ gap: 6 }}>
-            <button type="button" className="icon-button" onClick={() => setQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)])}><Sparkles size={16} /></button>
-          </div>
+        <div className="quote-banner">
+          <Sparkles size={15} className="quote-icon" />
+          <div className="quote">{quote}</div>
+          <button type="button" className="icon-button" onClick={() => setQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)])}><Sparkles size={16} /></button>
         </div>
         <div className="hero-row mt-8">
           <div className="greeting">
@@ -434,39 +525,18 @@ function App() {
             <div className="progress"><span style={{ width: completionPct + '%' }} /></div>
 
             <div className="task-list mt-12">
-              {allItems.map(item => {
-                const done = !!item.task?.done;
-                return (
-                  <div className={`task-card ${done ? 'done' : ''}`} key={item.key}>
-                    <div className="task-icon">{item.icon}</div>
-                    <div>
-                      <div className="task-name">{item.title}</div>
-                      <div className="task-time">{item.time}</div>
-                      <div className="pill-row">
-                        <span className={`pill cat-${item.tone}`}>{item.tag}</span>
-                        {!item.routine && (
-                          <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => deleteTask(item.task.id)} aria-label={`Delete ${item.title}`}>
-                            <Trash2 size={12} />
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div className="check-wrap">
-                      <button
-                        type="button"
-                        disabled={saving === 'task' || !user}
-                        aria-pressed={done}
-                        aria-label={done ? `Mark ${item.title} as not done` : `Mark ${item.title} as done`}
-                        className={`checkbox-button ${done ? 'checked' : ''}`}
-                        onClick={() => toggleItem(item)}
-                      >
-                        {done ? <Check size={18} /> : <span />}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {allItems.map(item => (
+                <TaskRow
+                  key={item.key}
+                  item={item}
+                  done={!!item.task?.done}
+                  disabled={saving === 'task' || !user}
+                  onToggle={toggleItem}
+                  onDelete={deleteTask}
+                />
+              ))}
             </div>
+            <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe a task left to delete it.</p>
             <button type="button" className="soft-button mt-12" style={{ width: '100%', justifyContent: 'center' }} onClick={loadRoutine}>
               <AlarmClock size={16} />Load routine into today's tracker
             </button>
@@ -537,11 +607,37 @@ function App() {
                   {String(Math.floor(timer / 60)).padStart(2, '0')}:{String(timer % 60).padStart(2, '0')}
                 </div>
               </div>
+
+              <div className="duration-row mt-12">
+                {[15, 25, 45, 60, 90].map(mins => (
+                  <button
+                    key={mins}
+                    type="button"
+                    disabled={running}
+                    className={`duration-chip ${focusMinutes === mins ? 'active' : ''}`}
+                    onClick={() => setFocusDuration(mins)}
+                  >
+                    {mins}m
+                  </button>
+                ))}
+                <div className="duration-custom">
+                  <input
+                    type="number"
+                    min="1"
+                    max="180"
+                    disabled={running}
+                    value={focusMinutes}
+                    onChange={e => setFocusDuration(e.target.value)}
+                  />
+                  <span className="muted small">min</span>
+                </div>
+              </div>
+
               <div className="row mt-12" style={{ gap: 10 }}>
                 <button type="button" className="primary-button" style={{ flex: 1 }} onClick={() => setRunning(v => !v)}>
                   {running ? <Pause size={16} /> : <Play size={16} />}{running ? 'Pause' : 'Start'}
                 </button>
-                <button type="button" className="soft-button" style={{ flex: 1 }} onClick={() => { setRunning(false); setTimer(1500); }}>
+                <button type="button" className="soft-button" style={{ flex: 1 }} onClick={() => { setRunning(false); setTimer(focusMinutes * 60); }}>
                   <RotateCcw size={16} />Reset
                 </button>
               </div>
