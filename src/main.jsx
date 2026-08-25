@@ -193,21 +193,22 @@ function App() {
   const completionPct = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
 
   const toggleItem = async item => {
-    if (saving) return;
+    if (saving || !supabase || !user) return;
     setSaving('task');
-    let task = item.task;
-    if (!task && item.routine) task = await ensureTask(item.routine);
-    if (!task) { setSaving(''); return; }
-    const next = !task.done;
-    setTasks(v => v.map(t => (t.id === task.id ? { ...t, done: next } : t)));
     try {
+      let task = item.task;
+      if (!task && item.routine) task = await ensureTask(item.routine);
+      if (!task) return;
+      const next = !task.done;
+      setTasks(v => v.map(t => (t.id === task.id ? { ...t, done: next } : t)));
       const { error } = await supabase.from('tasks')
         .update({ done: next, completed_at: next ? new Date().toISOString() : null })
-        .eq('id', task.id).eq('user_id', user.id);
+        .eq('id', task.id)
+        .eq('user_id', user.id);
       if (error) throw error;
       flash(next ? 'Task completed ✓' : 'Task reopened');
     } catch (error) {
-      setTasks(v => v.map(t => (t.id === task.id ? { ...t, done: !next } : t)));
+      setTasks(v => v.map(t => (t.id === item.task?.id ? { ...t, done: !t.done } : t)));
       flash('Could not save task: ' + error.message);
     } finally {
       setSaving('');
