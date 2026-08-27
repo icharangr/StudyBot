@@ -114,9 +114,13 @@ input, select { font-size: 16px; }
 }
 .task-card.done { border-color:rgba(37,99,235,.30); background:#eff6ff; opacity:.88; }
 .task-card.focusing { border-color:#1e3a8a; box-shadow:0 0 0 1px rgba(30,58,138,.25); }
-.task-card.reordering { opacity:.72; border:2px dashed #2563eb; transform:scale(.98); }
+.task-card.reordering { opacity:.72; border:2px dashed #2563eb; transform:scale(.98); touch-action:none; }
+.task-card.rolled { border-color:#a78bfa; background:#f5f3ff; }
+.rollover-pill { background:#ede9fe; border-color:#c4b5fd; color:#6d28d9; }
 .task-icon { width:42px; height:42px; display:grid; place-items:center; border-radius:10px; background:#eff6ff; border:1px solid var(--border-subtle); font-size:1.1rem; font-weight:700; }
 .task-name { font-weight:700; line-height:1.2; word-break:break-word; }
+.drag-handle { display:inline-grid; place-items:center; margin-left:5px; padding:2px 4px; border-radius:5px; color:#94a3b8; font-size:.9rem; letter-spacing:-2px; cursor:grab; touch-action:none; user-select:none; }
+.drag-handle:active { cursor:grabbing; color:#2563eb; background:#e8f1ff; }
 .task-time { margin-top:4px; color:var(--text-secondary); font-family:"JetBrains Mono", monospace; font-size:.72rem; }
 .pill-row { display:flex; align-items:center; gap:7px; flex-wrap:wrap; margin-top:7px; }
 .pill { display:inline-flex; align-items:center; gap:4px; min-height:24px; padding:3px 8px; border:1px solid; border-radius:999px; font-size:.68rem; font-weight:700; text-transform:uppercase; }
@@ -190,9 +194,15 @@ input, select { font-size: 16px; }
 .heatmap-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:9px; font-size:.78rem; }
 .heatmap-head span { color:var(--text-secondary); font-size:.62rem; white-space:nowrap; }
 .heatmap-grid { display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:6px; }
-.heat-cell { min-height:44px; display:grid; place-items:center; align-content:center; gap:1px; border-radius:8px; font-size:.6rem; color:#fff; }
+.heat-cell { min-height:44px; display:grid; place-items:center; align-content:center; gap:1px; padding:2px; border:0; border-radius:8px; font-size:.6rem; color:#fff; }
 .heat-cell b { font-size:.76rem; }
-.heat-cell.red { background:#ef4444; }.heat-cell.orange { background:#f59e0b; }.heat-cell.green { background:#22c55e; }
+.heat-cell.red { background:#ef4444; }.heat-cell.orange { background:#f59e0b; }.heat-cell.green { background:#22c55e; }.heat-cell.purple { background:#8b5cf6; }
+.day-history { margin:-5px 0 14px; padding:10px; }
+.day-history .icon-button { width:30px; height:30px; min-height:30px; }
+.day-history-list { display:grid; gap:7px; }
+.day-history-task { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:8px; border-radius:8px; background:#f7fbff; font-size:.8rem; }
+.day-history-task small { color:var(--text-secondary); white-space:nowrap; font-family:"JetBrains Mono",monospace; font-size:.62rem; }
+.day-history-task.done { background:#ecfdf5; color:#64748b; text-decoration:line-through; }
 
 .chat-window { display:grid; gap:10px; min-height:200px; align-content:start; }
 .message { max-width:88%; padding:10px 12px; line-height:1.45; white-space:pre-wrap; animation:fadeIn .3s ease both; }

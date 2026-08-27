@@ -75,6 +75,11 @@ const TAG_TONE = {
   UPSC: 'upsc', GATE: 'gate', DSA: 'dsa', 'Current Affairs': 'study',
   Revision: 'study', Routine: 'routine', Personal: 'college',
 };
+const TAG_EMOJI = {
+  UPSC: '📚', GATE: '⚙️', DSA: '💻', 'Current Affairs': '🗞️', Revision: '📝', Routine: '✨', Personal: '🧩',
+};
+const emojiFor = tag => TAG_EMOJI[tag] || '🎯';
+const withEmoji = (title, tag) => /[\u{1F300}-\u{1FAFF}]/u.test(String(title)) ? title : `${emojiFor(tag)} ${title}`;
 const QUICK_PROMPTS = [
   'Plan my day',
   'Start my day at 6:00 AM instead of 4:00 AM',
@@ -144,7 +149,7 @@ function FocusClock({ progress, active, running, onClick, label }) {
   );
 }
 
-function HeatMap({ title, days, history }) {
+function HeatMap({ title, days, history, onSelect }) {
   const byDay = new Map();
   for (const task of history) {
     const list = byDay.get(task.task_date) || [];
@@ -157,8 +162,9 @@ function HeatMap({ title, days, history }) {
       <div className="heatmap-grid">
         {days.map(day => {
           const list = byDay.get(day.key) || [];
-          const state = !list.length ? 'red' : list.every(t => t.done) ? 'green' : 'orange';
-          return <div className={`heat-cell ${state}`} key={day.key} title={`${day.label}: ${!list.length ? 'no tasks' : list.every(t => t.done) ? 'all complete' : 'partially complete'}`}><span>{day.label}</span><b>{day.number}</b></div>;
+          const future = day.key > today();
+          const state = future ? 'purple' : !list.length ? 'red' : list.every(t => t.done) ? 'green' : 'orange';
+          return <button type="button" className={`heat-cell ${state}`} key={day.key} onClick={() => onSelect(day.key)} title={`${day.label}: ${future ? 'future day' : !list.length ? 'no tasks' : list.every(t => t.done) ? 'all complete' : 'partially complete'}`}><span>{day.label}</span><b>{day.number}</b></button>;
         })}
       </div>
     </section>
@@ -232,6 +238,7 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, onReorder, focusedS
       return { x: t.clientX, y: t.clientY };
     };
     const down = e => {
+      if (e.type.startsWith('pointer') && e.pointerType !== 'mouse') return;
       if (e.target.closest('button')) return;
       const kind = e.type.startsWith('touch') ? 'touch' : 'pointer';
       if (using && using !== kind) return;
@@ -241,9 +248,10 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, onReorder, focusedS
       locked = null;
       startX = p.x;
       startY = p.y;
-      longPress = setTimeout(() => { reordering = true; el.classList.add('reordering'); }, 450);
+      longPress = setTimeout(() => { reordering = true; el.classList.add('reordering'); navigator.vibrate?.(12); }, 450);
     };
     const move = e => {
+      if (e.type.startsWith('pointer') && e.pointerType !== 'mouse') return;
       if (!dragging.current) return;
       const kind = e.type.startsWith('touch') ? 'touch' : 'pointer';
       if (using && using !== kind) return;
@@ -266,6 +274,7 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, onReorder, focusedS
       setDragX(next);
     };
     const up = e => {
+      if (e?.type?.startsWith('pointer') && e.pointerType !== 'mouse') return;
       if (!dragging.current) return;
       const kind = e?.type?.startsWith('touch') ? 'touch' : 'pointer';
       if (using && kind && using !== kind) return;
@@ -308,15 +317,16 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, onReorder, focusedS
       </div>
       <div
         ref={cardRef}
-        className={`task-card ${done ? 'done' : ''} ${focusing ? 'focusing' : ''}`}
+        className={`task-card ${done ? 'done' : ''} ${focusing ? 'focusing' : ''} ${item.rolled ? 'rolled' : ''}`}
         style={{ transform: dragX ? `translateX(${dragX}px)` : undefined, transition: dragging.current ? 'none' : 'transform .2s ease' }}
       >
         <div className="task-icon">{item.icon}</div>
         <div>
-          <div className="task-name">{item.title}</div>
+          <div className="task-name">{item.title} <span className="drag-handle" aria-label="Long-press and drag to move this mission">⠿</span></div>
           <div className="task-time">{item.time}{item.durationMinutes ? ` · ${item.durationMinutes}m` : ''}</div>
           <div className="pill-row">
             <span className={`pill cat-${item.tone}`}>{item.tag}</span>
+            {item.rolled && <span className="pill rollover-pill">↪ Rolled from yesterday</span>}
             {focusedSeconds > 0 && <span className="focus-time">{formatFocus(focusedSeconds)} focused</span>}
             <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => onDelete(item)} aria-label={`Delete ${item.title}`}>
               <Trash2 size={12} />
@@ -356,6 +366,9 @@ function App() {
   const [goals, setGoals] = useState([]);
   const [weekHistory, setWeekHistory] = useState([]);
   const [monthHistory, setMonthHistory] = useState([]);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [selectedDayTasks, setSelectedDayTasks] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [tab, setTab] = useState('today');
   const [quote, setQuote] = useState(() => pickKickQuote());
   const [toast, setToast] = useState('');
@@ -469,6 +482,10 @@ function App() {
   const load = async () => {
     if (!supabase || !user) return;
     try {
+      const rollover = await supabase.from('tasks')
+        .update({ task_date: today(), source: 'rollover' })
+        .eq('user_id', user.id).lt('task_date', today()).eq('done', false);
+      if (rollover.error) throw rollover.error;
       const now = new Date();
       const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
       const weekFrom = `${monday.getFullYear()}-${pad(monday.getMonth() + 1)}-${pad(monday.getDate())}`;
@@ -641,7 +658,7 @@ function App() {
     const timeLabel = start ? formatRange(start, duration) : 'Anytime';
     return {
       key: task.id || `template:${template?.title}:${template?.start}`,
-      title: task.title,
+      title: withEmoji(task.title, task.tag),
       time: timeLabel,
       start,
       durationMinutes: duration > 0 ? duration : durationFromRange(timeLabel, 25),
@@ -652,6 +669,7 @@ function App() {
       seed: template || null,
       task: task.id ? task : null,
       focusKey: task.id || `template:${template?.title}:${template?.start}`,
+      rolled: task.source === 'rollover',
     };
   };
 
@@ -770,7 +788,7 @@ function App() {
     const title = taskForm.title.trim();
     if (!title || !supabase || !user) return;
     const { error } = await supabase.from('tasks').insert({
-      user_id: user.id, title, task_date: today(), scheduled_time: taskForm.time || null,
+      user_id: user.id, title: withEmoji(title, taskForm.tag), task_date: today(), scheduled_time: taskForm.time || null,
       priority: taskForm.priority, tag: taskForm.tag || 'Personal', source: 'manual', done: false,
     });
     if (error) flash(error.message);
@@ -821,6 +839,24 @@ function App() {
     ]);
     if (a.error || b.error) { flash('Could not move the mission.'); load(); }
   };
+
+  const inspectDay = async day => {
+    setSelectedDay(day);
+    setHistoryLoading(true);
+    if (!supabase || !user) { setSelectedDayTasks([]); setHistoryLoading(false); return; }
+    const { data, error } = await supabase.from('tasks').select('*').eq('user_id', user.id).eq('task_date', day).order('scheduled_time');
+    setSelectedDayTasks(error ? [] : (data || []));
+    setHistoryLoading(false);
+  };
+
+  const dayHistoryPanel = selectedDay && (
+    <div className="day-history card">
+      <div className="between"><strong>📜 {selectedDay} history</strong><button type="button" className="icon-button" onClick={() => setSelectedDay(null)} aria-label="Close day history"><X size={16} /></button></div>
+      {historyLoading ? <div className="small muted mt-8">Loading tasks…</div> : selectedDayTasks.length ? (
+        <div className="day-history-list mt-8">{selectedDayTasks.map(task => <div key={task.id} className={`day-history-task ${task.done ? 'done' : ''}`}><span>{withEmoji(task.title, task.tag)}</span><small>{formatRange(normTime(task.scheduled_time), 0)} · {task.done ? '✅ done' : '⬜ pending'}</small></div>)}</div>
+      ) : <div className="empty-state mt-8">No tasks are available for this day. 🌿</div>}
+    </div>
+  );
 
   const loadRoutine = async (quiet = false) => {
     markDayCleared(false);
@@ -894,7 +930,7 @@ function App() {
       try {
         if (op.op === 'create') {
           const row = {
-            user_id: user.id, title: op.title, task_date: op.task_date || today(),
+            user_id: user.id, title: withEmoji(op.title, op.tag), task_date: op.task_date || today(),
             scheduled_time: op.time || null, priority: op.priority || 'Medium',
             tag: op.tag || 'Personal', source: 'ai', done: false,
           };
@@ -1060,7 +1096,8 @@ function App() {
       <div className="content">
         {tab === 'today' && (
           <>
-            <HeatMap title="📅 This week" days={weeklyDays} history={weekHistory} />
+            <HeatMap title="📅 This week" days={weeklyDays} history={weekHistory} onSelect={inspectDay} />
+            {dayHistoryPanel}
             <div className="between">
               <div className="section-title" style={{ margin: 0 }}>🎯 Mission list</div>
               <button type="button" className="soft-button" onClick={() => setShowAddTask(true)}><Plus size={16} />➕ Add</button>
@@ -1110,7 +1147,8 @@ function App() {
 
         {tab === 'goals' && (
           <>
-            <HeatMap title="🗓️ This month" days={monthlyDays} history={monthHistory} />
+            <HeatMap title="🗓️ This month" days={monthlyDays} history={monthHistory} onSelect={inspectDay} />
+            {dayHistoryPanel}
             <div className="between">
               <div className="section-title" style={{ margin: 0 }}>🌟 Month</div>
               <button type="button" className="soft-button" onClick={() => setShowAddGoal(true)}><Plus size={16} />➕ Add</button>
