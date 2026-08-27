@@ -96,7 +96,7 @@ function TaskRow({ item, done, disabled, onToggle, onDelete }) {
   const canSwipe = !item.routine && !!item.task;
 
   const onPointerDown = e => {
-    if (!canSwipe) return;
+    if (!canSwipe || e.target.closest('button')) return;
     dragging.current = true;
     locked.current = null;
     startX.current = e.clientX;
@@ -115,7 +115,7 @@ function TaskRow({ item, done, disabled, onToggle, onDelete }) {
     setDragX(Math.min(0, Math.max(dx, -SWIPE_MAX)));
   };
   const endDrag = () => {
-    if (!canSwipe) return;
+    if (!canSwipe || !dragging.current) return;
     dragging.current = false;
     if (locked.current === 'x' && dragX <= -SWIPE_TRIGGER) onDelete(item.task.id);
     setDragX(0);
@@ -157,7 +157,9 @@ function TaskRow({ item, done, disabled, onToggle, onDelete }) {
             aria-pressed={done}
             aria-label={done ? `Mark ${item.title} as not done` : `Mark ${item.title} as done`}
             className={`checkbox-button ${done ? 'checked' : ''}`}
-            onClick={() => onToggle(item)}
+            onPointerDown={e => e.stopPropagation()}
+            onPointerUp={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); onToggle(item); }}
           >
             {done ? <Check size={18} /> : <span />}
           </button>
