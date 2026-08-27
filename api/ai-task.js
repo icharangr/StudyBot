@@ -64,7 +64,6 @@ export default async function handler(req, res) {
           { role: 'user', content: `Context: ${JSON.stringify(context)}\nUser command: ${command}` },
         ],
         temperature: 0.1,
-        response_format: { type: 'json_object' },
       }),
     });
     if (!r.ok) {
@@ -76,7 +75,8 @@ export default async function handler(req, res) {
     const d = await r.json();
     const text = d?.choices?.[0]?.message?.content;
     if (!text) return res.status(502).json({ error: 'Groq returned no output' });
-    const result = JSON.parse(text);
+    const jsonText = text.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
+    const result = JSON.parse(jsonText);
     if (!Array.isArray(result.operations)) result.operations = [];
     return res.status(200).json(result);
   } catch (e) {

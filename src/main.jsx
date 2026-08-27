@@ -39,17 +39,14 @@ const markDayCleared = cleared => {
 };
 
 const ROUTINE_SEED = [
-  ['UPSC', '04:30', '07:00', 'UPSC', 'High', 'U', 'upsc'],
-  ['GATE', '07:00', '08:30', 'GATE', 'High', 'G', 'gate'],
-  ['Supplements', '08:45', '08:45', 'Routine', 'Medium', 'S', 'routine'],
-  ['GATE', '09:00', '11:00', 'GATE', 'High', 'G', 'gate'],
-  ['Read / Re-Vision', '11:00', '12:00', 'Revision', 'High', 'R', 'study'],
-  ['UPSC', '12:00', '14:00', 'UPSC', 'High', 'U', 'upsc'],
-  ['Lunch', '14:00', '14:30', 'Routine', 'Low', 'L', 'routine'],
-  ['DSA', '14:30', '17:00', 'DSA', 'High', 'D', 'dsa'],
-  ['DSA', '18:00', '20:00', 'DSA', 'High', 'D', 'dsa'],
-  ['Current Affairs', '21:00', '22:00', 'Current Affairs', 'High', 'C', 'study'],
-  ['Bed', '23:00', '23:00', 'Routine', 'Low', 'B', 'routine'],
+  ['📚 UPSC', '06:00', '08:30', 'UPSC', 'High', '📚', 'upsc'],
+  ['💊 Supplements', '08:45', '09:00', 'Routine', 'Medium', '💊', 'routine'],
+  ['⚙️ GATE', '09:00', '11:30', 'GATE', 'High', '⚙️', 'gate'],
+  ['📚 UPSC', '12:00', '14:00', 'UPSC', 'High', '📚', 'upsc'],
+  ['💻 DSA', '14:30', '16:30', 'DSA', 'High', '💻', 'dsa'],
+  ['💻 DSA', '18:00', '20:00', 'DSA', 'High', '💻', 'dsa'],
+  ['🗞️ Current Affairs', '21:00', '22:00', 'Current Affairs', 'High', '🗞️', 'study'],
+  ['📝 RE-Vision', '22:30', '00:30', 'Revision', 'High', '📝', 'study'],
 ];
 
 function shiftedRoutine(dayStart = DEFAULT_DAY_START) {
@@ -147,6 +144,27 @@ function FocusClock({ progress, active, running, onClick, label }) {
   );
 }
 
+function HeatMap({ title, days, history }) {
+  const byDay = new Map();
+  for (const task of history) {
+    const list = byDay.get(task.task_date) || [];
+    list.push(task);
+    byDay.set(task.task_date, list);
+  }
+  return (
+    <section className="heatmap" aria-label={title}>
+      <div className="heatmap-head"><strong>{title}</strong><span>🔴 none · 🟠 partial · 🟢 complete</span></div>
+      <div className="heatmap-grid">
+        {days.map(day => {
+          const list = byDay.get(day.key) || [];
+          const state = !list.length ? 'red' : list.every(t => t.done) ? 'green' : 'orange';
+          return <div className={`heat-cell ${state}`} key={day.key} title={`${day.label}: ${!list.length ? 'no tasks' : list.every(t => t.done) ? 'all complete' : 'partially complete'}`}><span>{day.label}</span><b>{day.number}</b></div>;
+        })}
+      </div>
+    </section>
+  );
+}
+
 class AppErrorBoundary extends Component {
   state = { error: null };
   static getDerivedStateFromError(error) { return { error }; }
@@ -189,7 +207,7 @@ function Sheet({ title, onClose, onSubmit, submitLabel = 'Save', children }) {
 const SWIPE_TRIGGER = 72;
 const SWIPE_MAX = 96;
 
-function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, focusProgress, focusing, onFocusToggle }) {
+function TaskRow({ item, done, disabled, onToggle, onDelete, onReorder, focusedSeconds, focusProgress, focusing, onFocusToggle }) {
   const [dragX, setDragX] = useState(0);
   const cardRef = useRef(null);
   const dragXRef = useRef(0);
@@ -206,6 +224,8 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, foc
     let startY = 0;
     let locked = null;
     let using = null;
+    let longPress = null;
+    let reordering = false;
 
     const point = e => {
       const t = e.touches?.[0] || e.changedTouches?.[0] || e;
@@ -221,6 +241,7 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, foc
       locked = null;
       startX = p.x;
       startY = p.y;
+      longPress = setTimeout(() => { reordering = true; el.classList.add('reordering'); }, 450);
     };
     const move = e => {
       if (!dragging.current) return;
@@ -229,6 +250,11 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, foc
       const p = point(e);
       const dx = p.x - startX;
       const dy = p.y - startY;
+      if (reordering) {
+        if (Math.abs(dy) >= 48) { onReorder(itemRef.current, dy < 0 ? -1 : 1); startY = p.y; }
+        e.preventDefault();
+        return;
+      }
       if (!locked) {
         if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
         locked = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
@@ -244,6 +270,9 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, foc
       const kind = e?.type?.startsWith('touch') ? 'touch' : 'pointer';
       if (using && kind && using !== kind) return;
       dragging.current = false;
+      clearTimeout(longPress);
+      el.classList.remove('reordering');
+      reordering = false;
       using = null;
       if (locked === 'x' && dragXRef.current <= -SWIPE_TRIGGER) onDeleteRef.current(itemRef.current);
       dragXRef.current = 0;
@@ -260,6 +289,7 @@ function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, foc
     el.addEventListener('touchend', up);
     el.addEventListener('touchcancel', up);
     return () => {
+      clearTimeout(longPress);
       el.removeEventListener('pointerdown', down);
       el.removeEventListener('pointermove', move);
       el.removeEventListener('pointerup', up);
@@ -324,6 +354,8 @@ function App() {
   const [authReady, setAuthReady] = useState(!supabase);
   const [tasks, setTasks] = useState([]);
   const [goals, setGoals] = useState([]);
+  const [weekHistory, setWeekHistory] = useState([]);
+  const [monthHistory, setMonthHistory] = useState([]);
   const [tab, setTab] = useState('today');
   const [quote, setQuote] = useState(() => pickKickQuote());
   const [toast, setToast] = useState('');
@@ -333,7 +365,10 @@ function App() {
   const [running, setRunning] = useState(false);
   const [hours, setHours] = useState(6);
   const [dayStart, setDayStart] = useState(() => {
-    try { return localStorage.getItem(dayStartKey) || DEFAULT_DAY_START; } catch { return DEFAULT_DAY_START; }
+    try {
+      const saved = localStorage.getItem(dayStartKey);
+      return saved === '04:30' ? DEFAULT_DAY_START : (saved || DEFAULT_DAY_START);
+    } catch { return DEFAULT_DAY_START; }
   });
   const [focusLog, setFocusLog] = useState(() => readFocusLog());
   const [activeFocusId, setActiveFocusId] = useState(null);
@@ -351,6 +386,7 @@ function App() {
   const quoteRef = useRef(quote);
   const activeFocusRef = useRef(null);
   const sessionStampRef = useRef(null);
+  const timerTickRef = useRef(Date.now());
   const tasksRef = useRef([]);
   const seededRef = useRef(false);
 
@@ -433,6 +469,10 @@ function App() {
   const load = async () => {
     if (!supabase || !user) return;
     try {
+      const now = new Date();
+      const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+      const weekFrom = `${monday.getFullYear()}-${pad(monday.getMonth() + 1)}-${pad(monday.getDate())}`;
+      const monthFrom = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
       const [a, b] = await Promise.all([
         supabase.from('tasks').select('*').eq('user_id', user.id).eq('task_date', today()).order('scheduled_time'),
         supabase.from('monthly_goals').select('*').eq('user_id', user.id).eq('month_start', monthStart()),
@@ -441,11 +481,16 @@ function App() {
       if (b.error) throw b.error;
       setTasks(a.data || []);
       setGoals(b.data || []);
+      const history = await supabase.from('tasks').select('task_date,done').eq('user_id', user.id).gte('task_date', monthFrom).order('task_date');
+      if (!history.error) {
+        setWeekHistory((history.data || []).filter(t => t.task_date >= weekFrom));
+        setMonthHistory(history.data || []);
+      }
       setHydrated(true);
       try {
         const profile = await supabase.from('profiles').select('day_start').eq('id', user.id).maybeSingle();
         const remoteStart = normTime(profile.data?.day_start);
-        if (remoteStart) persistDayStart(remoteStart);
+        if (remoteStart) persistDayStart(remoteStart === '04:30' ? DEFAULT_DAY_START : remoteStart);
       } catch { /* day_start column is optional on older schemas */ }
       const nextLog = { ...readFocusLog() };
       for (const task of a.data || []) {
@@ -474,23 +519,34 @@ function App() {
   useEffect(() => {
     if (!running) return;
     if (!sessionStampRef.current) sessionStampRef.current = new Date().toISOString();
-    const id = setInterval(() => {
+    timerTickRef.current = Date.now();
+    const tick = () => {
+      const elapsed = Math.max(0, Math.floor((Date.now() - timerTickRef.current) / 1000));
+      if (!elapsed) return;
+      timerTickRef.current += elapsed * 1000;
       setTimer(v => {
-        if (v <= 1) {
+        if (v <= elapsed) {
           setRunning(false);
           return 0;
         }
-        return v - 1;
+        return v - elapsed;
       });
       const key = activeFocusRef.current;
       if (!key) return;
       setFocusLog(prev => {
-        const next = { ...prev, [key]: (prev[key] || 0) + 1 };
+        const next = { ...prev, [key]: (prev[key] || 0) + elapsed };
         writeFocusLog(next);
         return next;
       });
-    }, 1000);
-    return () => clearInterval(id);
+    };
+    const id = setInterval(tick, 1000);
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', tick);
+      window.removeEventListener('focus', tick);
+    };
   }, [running]);
 
   useEffect(() => {
@@ -746,6 +802,26 @@ function App() {
     await deleteTask(task.id);
   };
 
+  const reorderTask = async (item, direction) => {
+    const current = item.task;
+    if (!current?.id) return;
+    const ordered = [...tasksRef.current].sort((a, b) => (a.scheduled_time || '99:99').localeCompare(b.scheduled_time || '99:99'));
+    const index = ordered.findIndex(t => t.id === current.id);
+    const neighbour = ordered[index + direction];
+    if (!neighbour) return;
+    const currentTime = current.scheduled_time;
+    const nextTime = neighbour.scheduled_time;
+    const swapped = ordered.map(t => t.id === current.id ? { ...t, scheduled_time: nextTime } : t.id === neighbour.id ? { ...t, scheduled_time: currentTime } : t)
+      .sort((a, b) => (a.scheduled_time || '99:99').localeCompare(b.scheduled_time || '99:99'));
+    tasksRef.current = swapped;
+    setTasks(swapped);
+    const [a, b] = await Promise.all([
+      supabase.from('tasks').update({ scheduled_time: nextTime }).eq('id', current.id).eq('user_id', user.id),
+      supabase.from('tasks').update({ scheduled_time: currentTime }).eq('id', neighbour.id).eq('user_id', user.id),
+    ]);
+    if (a.error || b.error) { flash('Could not move the mission.'); load(); }
+  };
+
   const loadRoutine = async (quiet = false) => {
     markDayCleared(false);
     let failed = false;
@@ -919,7 +995,7 @@ function App() {
         setChatMessages(v => [...v, {
           id: crypto.randomUUID(),
           role: 'bot',
-          text: `Mission list updated locally — day now starts at ${inferred.newStart}. ${error.message}`,
+          text: `✅ Mission list updated — your day now starts at ${formatRange(inferred.newStart, 0)}.`,
         }]);
       } else {
         setChatMessages(v => [...v, { id: crypto.randomUUID(), role: 'bot', text: "Couldn't reach the AI — " + error.message }]);
@@ -939,6 +1015,14 @@ function App() {
   const dismissMessage = id => setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true, dismissed: true } : m)));
 
   const activeItem = allItems.find(i => i.focusKey === activeFocusId || i.task?.id === activeFocusId);
+  const calendarDays = (count, start) => Array.from({ length: count }, (_, index) => {
+    const d = new Date(start); d.setDate(d.getDate() + index);
+    return { key: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`, label: count === 7 ? ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][index] : String(d.getDate()), number: d.getDate() };
+  });
+  const monday = new Date(); monday.setHours(0, 0, 0, 0); monday.setDate(monday.getDate() - ((monday.getDay() + 6) % 7));
+  const weeklyDays = calendarDays(7, monday);
+  const firstOfMonth = new Date(); firstOfMonth.setDate(1); firstOfMonth.setHours(0, 0, 0, 0);
+  const monthlyDays = calendarDays(new Date(firstOfMonth.getFullYear(), firstOfMonth.getMonth() + 1, 0).getDate(), firstOfMonth);
 
   if (!authReady) {
     return (
@@ -976,9 +1060,10 @@ function App() {
       <div className="content">
         {tab === 'today' && (
           <>
+            <HeatMap title="📅 This week" days={weeklyDays} history={weekHistory} />
             <div className="between">
-              <div className="section-title" style={{ margin: 0 }}>Mission list</div>
-              <button type="button" className="soft-button" onClick={() => setShowAddTask(true)}><Plus size={16} />Add</button>
+              <div className="section-title" style={{ margin: 0 }}>🎯 Mission list</div>
+              <button type="button" className="soft-button" onClick={() => setShowAddTask(true)}><Plus size={16} />➕ Add</button>
             </div>
             {allItems.length ? (
               <>
@@ -1000,6 +1085,7 @@ function App() {
                         disabled={saving === 'task' || !user}
                         onToggle={toggleItem}
                         onDelete={removeItem}
+                        onReorder={reorderTask}
                         focusedSeconds={focusLog[key] || focusLog[item.focusKey] || 0}
                         focusProgress={consumed}
                         focusing={focusing}
@@ -1008,7 +1094,7 @@ function App() {
                     );
                   })}
                 </div>
-                <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe a mission left to delete it.</p>
+                <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe left to delete · long-press and drag up/down to swap times.</p>
               </>
             ) : (
               <div className="empty-state mt-12">
@@ -1024,9 +1110,10 @@ function App() {
 
         {tab === 'goals' && (
           <>
+            <HeatMap title="🗓️ This month" days={monthlyDays} history={monthHistory} />
             <div className="between">
-              <div className="section-title" style={{ margin: 0 }}>Month</div>
-              <button type="button" className="soft-button" onClick={() => setShowAddGoal(true)}><Plus size={16} />Add</button>
+              <div className="section-title" style={{ margin: 0 }}>🌟 Month</div>
+              <button type="button" className="soft-button" onClick={() => setShowAddGoal(true)}><Plus size={16} />➕ Add</button>
             </div>
             <div className="goals-list mt-12">
               {goals.length ? goals.map(goal => {
