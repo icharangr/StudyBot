@@ -2,7 +2,7 @@ import React, { Component, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Check, Clock, Plus, Sparkles, Target, LayoutDashboard, MessageCircle,
-  Play, Pause, RotateCcw, AlarmClock, X, Send, Loader2, Trash2,
+  Play, Pause, AlarmClock, X, Send, Loader2, Trash2,
 } from 'lucide-react';
 import './styles.css';
 import { supabase } from './lib/supabase';
@@ -83,6 +83,28 @@ function formatFocus(seconds) {
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
 }
 
+function formatClockHMS(seconds) {
+  const s = Math.max(0, Math.floor(Number(seconds) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
+}
+
+function durationFromRange(time, fallback = 25) {
+  const text = String(time || '');
+  const parts = text.split(/[–-]/).map(v => normTime(v.trim())).filter(Boolean);
+  if (parts.length >= 2) {
+    const a = timeToMinutes(parts[0]);
+    const b = timeToMinutes(parts[1]);
+    if (a != null && b != null) {
+      const mins = b > a ? b - a : ((b - a) + 1440) % 1440;
+      if (mins > 0) return mins;
+    }
+  }
+  return Math.max(1, Number(fallback) || 25);
+}
+
 function readFocusLog() {
   try { return JSON.parse(localStorage.getItem(focusStorageKey()) || '{}'); } catch { return {}; }
 }
@@ -91,7 +113,7 @@ function writeFocusLog(log) {
   try { localStorage.setItem(focusStorageKey(), JSON.stringify(log)); } catch { /* ignore */ }
 }
 
-function FocusClock({ progress, active, onClick, label }) {
+function FocusClock({ progress, active, running, onClick, label }) {
   const pct = Math.min(1, Math.max(0, Number(progress) || 0));
   const angle = pct * 360;
   return (
@@ -108,6 +130,9 @@ function FocusClock({ progress, active, onClick, label }) {
           background: `conic-gradient(from -90deg, #9ec5ff 0deg ${angle}deg, #0a2463 ${angle}deg 360deg)`,
         }}
       />
+      <span className="focus-clock-icon">
+        {running ? <Pause size={13} fill="currentColor" /> : <Play size={13} fill="currentColor" />}
+      </span>
     </button>
   );
 }
@@ -156,73 +181,114 @@ const SWIPE_MAX = 96;
 
 function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, focusProgress, focusing, onFocusToggle }) {
   const [dragX, setDragX] = useState(0);
+  const cardRef = useRef(null);
+  const dragXRef = useRef(0);
   const dragging = useRef(false);
-  const startX = useRef(0);
-  const startY = useRef(0);
-  const locked = useRef(null);
-  const canSwipe = !!item.task && !item.template;
+  const onDeleteRef = useRef(onDelete);
+  const itemRef = useRef(item);
+  onDeleteRef.current = onDelete;
+  itemRef.current = item;
 
-  const onPointerDown = e => {
-    if (!canSwipe || e.target.closest('button')) return;
-    dragging.current = true;
-    locked.current = null;
-    startX.current = e.clientX;
-    startY.current = e.clientY;
-  };
-  const onPointerMove = e => {
-    if (!canSwipe || !dragging.current) return;
-    const dx = e.clientX - startX.current;
-    const dy = e.clientY - startY.current;
-    if (!locked.current) {
-      if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
-      locked.current = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
-    }
-    if (locked.current !== 'x') return;
-    e.currentTarget.setPointerCapture?.(e.pointerId);
-    setDragX(Math.min(0, Math.max(dx, -SWIPE_MAX)));
-  };
-  const endDrag = () => {
-    if (!canSwipe || !dragging.current) return;
-    dragging.current = false;
-    if (locked.current === 'x' && dragX <= -SWIPE_TRIGGER) onDelete(item.task.id);
-    setDragX(0);
-    locked.current = null;
-  };
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    let startX = 0;
+    let startY = 0;
+    let locked = null;
+    let using = null;
+
+    const point = e => {
+      const t = e.touches?.[0] || e.changedTouches?.[0] || e;
+      return { x: t.clientX, y: t.clientY };
+    };
+    const down = e => {
+      if (e.target.closest('button')) return;
+      const kind = e.type.startsWith('touch') ? 'touch' : 'pointer';
+      if (using && using !== kind) return;
+      using = kind;
+      const p = point(e);
+      dragging.current = true;
+      locked = null;
+      startX = p.x;
+      startY = p.y;
+    };
+    const move = e => {
+      if (!dragging.current) return;
+      const kind = e.type.startsWith('touch') ? 'touch' : 'pointer';
+      if (using && using !== kind) return;
+      const p = point(e);
+      const dx = p.x - startX;
+      const dy = p.y - startY;
+      if (!locked) {
+        if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+        locked = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      }
+      if (locked !== 'x') return;
+      e.preventDefault();
+      const next = Math.min(0, Math.max(dx, -SWIPE_MAX));
+      dragXRef.current = next;
+      setDragX(next);
+    };
+    const up = e => {
+      if (!dragging.current) return;
+      const kind = e?.type?.startsWith('touch') ? 'touch' : 'pointer';
+      if (using && kind && using !== kind) return;
+      dragging.current = false;
+      using = null;
+      if (locked === 'x' && dragXRef.current <= -SWIPE_TRIGGER) onDeleteRef.current(itemRef.current);
+      dragXRef.current = 0;
+      setDragX(0);
+      locked = null;
+    };
+
+    el.addEventListener('pointerdown', down);
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('touchstart', down, { passive: true });
+    el.addEventListener('touchmove', move, { passive: false });
+    el.addEventListener('touchend', up);
+    el.addEventListener('touchcancel', up);
+    return () => {
+      el.removeEventListener('pointerdown', down);
+      el.removeEventListener('pointermove', move);
+      el.removeEventListener('pointerup', up);
+      el.removeEventListener('pointercancel', up);
+      el.removeEventListener('touchstart', down);
+      el.removeEventListener('touchmove', move);
+      el.removeEventListener('touchend', up);
+      el.removeEventListener('touchcancel', up);
+    };
+  }, []);
 
   return (
     <div className="task-swipe">
-      {canSwipe && (
-        <div className="task-swipe-action" style={{ opacity: Math.min(1, -dragX / SWIPE_TRIGGER) }}>
-          <Trash2 size={18} />
-        </div>
-      )}
+      <div className="task-swipe-action" style={{ opacity: Math.min(1, -dragX / SWIPE_TRIGGER) }}>
+        <Trash2 size={18} />
+      </div>
       <div
+        ref={cardRef}
         className={`task-card ${done ? 'done' : ''} ${focusing ? 'focusing' : ''}`}
         style={{ transform: dragX ? `translateX(${dragX}px)` : undefined, transition: dragging.current ? 'none' : 'transform .2s ease' }}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
       >
         <div className="task-icon">{item.icon}</div>
         <div>
           <div className="task-name">{item.title}</div>
-          <div className="task-time">{item.time}</div>
+          <div className="task-time">{item.time}{item.durationMinutes ? ` · ${item.durationMinutes}m` : ''}</div>
           <div className="pill-row">
             <span className={`pill cat-${item.tone}`}>{item.tag}</span>
             {focusedSeconds > 0 && <span className="focus-time">{formatFocus(focusedSeconds)} focused</span>}
-            {item.task && !item.template && (
-              <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => onDelete(item.task.id)} aria-label={`Delete ${item.title}`}>
-                <Trash2 size={12} />
-              </button>
-            )}
+            <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => onDelete(item)} aria-label={`Delete ${item.title}`}>
+              <Trash2 size={12} />
+            </button>
           </div>
         </div>
         <div className="check-wrap">
           <FocusClock
             progress={focusProgress}
             active={focusing}
-            label={focusing ? `Pause focus on ${item.title}` : `Start focus on ${item.title}`}
+            running={focusing}
+            label={focusing ? `Pause focus on ${item.title}` : `Start ${item.durationMinutes || 25}m focus on ${item.title}`}
             onClick={e => { e.stopPropagation(); onFocusToggle(item); }}
           />
           <button
@@ -270,13 +336,17 @@ function App() {
   ]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const chatEndRef = useRef(null);
   const quoteRef = useRef(quote);
   const activeFocusRef = useRef(null);
   const sessionStampRef = useRef(null);
+  const tasksRef = useRef([]);
+  const seededRef = useRef(false);
 
   quoteRef.current = quote;
   activeFocusRef.current = activeFocusId;
+  tasksRef.current = tasks;
 
   const flash = m => { setToast(String(m || 'Something went wrong')); setTimeout(() => setToast(''), 3500); };
   const persistDayStart = value => {
@@ -353,17 +423,20 @@ function App() {
   const load = async () => {
     if (!supabase || !user) return;
     try {
-      const [a, b, profile] = await Promise.all([
+      const [a, b] = await Promise.all([
         supabase.from('tasks').select('*').eq('user_id', user.id).eq('task_date', today()).order('scheduled_time'),
         supabase.from('monthly_goals').select('*').eq('user_id', user.id).eq('month_start', monthStart()),
-        supabase.from('profiles').select('day_start').eq('id', user.id).maybeSingle(),
       ]);
       if (a.error) throw a.error;
       if (b.error) throw b.error;
       setTasks(a.data || []);
       setGoals(b.data || []);
-      const remoteStart = normTime(profile.data?.day_start);
-      if (remoteStart) persistDayStart(remoteStart);
+      setHydrated(true);
+      try {
+        const profile = await supabase.from('profiles').select('day_start').eq('id', user.id).maybeSingle();
+        const remoteStart = normTime(profile.data?.day_start);
+        if (remoteStart) persistDayStart(remoteStart);
+      } catch { /* day_start column is optional on older schemas */ }
       const nextLog = { ...readFocusLog() };
       for (const task of a.data || []) {
         const stored = Number(task.focus_seconds || 0);
@@ -372,6 +445,7 @@ function App() {
       setFocusLog(nextLog);
       writeFocusLog(nextLog);
     } catch (error) {
+      setHydrated(true);
       flash(error.message);
     }
   };
@@ -431,50 +505,85 @@ function App() {
   };
 
   const setFocusDuration = mins => {
-    const clamped = Math.min(180, Math.max(1, Math.round(Number(mins) || 0)));
+    const clamped = Math.min(360, Math.max(1, Math.round(Number(mins) || 0)));
     setFocusMinutes(clamped);
     if (!running) setTimer(clamped * 60);
+    return clamped;
   };
 
   const routine = shiftedRoutine(dayStart);
 
-  const findRoutineTask = r => tasks.find(t => t.title === r.title && normTime(t.scheduled_time) === r.start);
+  const findRoutineTask = r => (tasksRef.current || []).find(t => t.title === r.title && normTime(t.scheduled_time) === r.start);
+
+  const rememberTask = data => {
+    if (!data) return data;
+    const next = [...tasksRef.current.filter(t => t.id !== data.id), data]
+      .sort((a, b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || ''));
+    tasksRef.current = next;
+    setTasks(next);
+    return data;
+  };
 
   const ensureTask = async r => {
+    if (!r) return null;
     if (!supabase || !user) return null;
     const existing = findRoutineTask(r);
     if (existing) return existing;
 
-    const { data, error } = await supabase.from('tasks').insert({
+    const row = {
       user_id: user.id,
       title: r.title,
       task_date: today(),
       scheduled_time: r.start,
-      priority: r.priority,
-      tag: r.tag,
-      source: 'routine',
+      priority: r.priority || 'Medium',
+      tag: r.tag || 'Personal',
+      source: 'manual',
       done: false,
-    }).select().single();
+    };
 
+    let { data, error } = await supabase.from('tasks').insert(row).select().single();
     if (error) {
-      flash(error.message);
+      const lookup = await supabase.from('tasks').select('*')
+        .eq('user_id', user.id).eq('task_date', today())
+        .eq('title', r.title).eq('scheduled_time', r.start).maybeSingle();
+      if (lookup.data) return rememberTask(lookup.data);
+      const fallback = await supabase.from('tasks').insert({
+        user_id: user.id,
+        title: r.title,
+        task_date: today(),
+        scheduled_time: r.start,
+        priority: 'Medium',
+        tag: r.tag || 'Personal',
+        source: 'manual',
+        done: false,
+      }).select().single();
+      data = fallback.data;
+      error = fallback.error;
+    }
+    if (error || !data) {
+      flash(error?.message || 'Could not create this mission in your tracker.');
       return null;
     }
-    setTasks(v => [...v, data].sort((a, b) => (a.scheduled_time || '').localeCompare(b.scheduled_time || '')));
-    return data;
+    return rememberTask(data);
   };
 
   const toItem = (task, template) => {
     const start = normTime(task.scheduled_time) || template?.start;
-    const duration = Number(task.duration_minutes) || template?.duration || 0;
+    const duration = Number(task.duration_minutes)
+      || template?.duration
+      || durationFromRange(template?.time || task.time, 25);
+    const timeLabel = start ? formatRange(start, duration) : 'Anytime';
     return {
       key: task.id || `template:${template?.title}:${template?.start}`,
       title: task.title,
-      time: start ? formatRange(start, duration) : 'Anytime',
+      time: timeLabel,
+      start,
+      durationMinutes: duration > 0 ? duration : durationFromRange(timeLabel, 25),
       tag: task.tag,
       tone: TAG_TONE[task.tag] || template?.tone || 'routine',
       icon: template?.icon || (task.tag || 'T')[0],
       template: !task.id,
+      seed: template || null,
       task: task.id ? task : null,
       focusKey: task.id || `template:${template?.title}:${template?.start}`,
     };
@@ -493,28 +602,40 @@ function App() {
   const totalCount = allItems.length;
   const completedCount = allItems.filter(i => i.task?.done).length;
   const completionPct = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
-  const sessionLength = Math.max(1, focusMinutes * 60);
-  const sessionConsumed = 1 - (timer / sessionLength);
+  const focusedToday = Object.values(focusLog).reduce((n, s) => n + Number(s || 0), 0);
+
+  const resolveItemTask = async item => {
+    if (item.task?.id) return item.task;
+    const seed = item.seed
+      || routine.find(r => r.title === item.title && r.start === item.start)
+      || routine.find(r => r.title === item.title);
+    return seed ? ensureTask(seed) : null;
+  };
 
   const toggleFocusFor = async item => {
-    let task = item.task;
-    if (!task && item.template) task = await ensureTask(routine.find(r => r.title === item.title && r.start === (normTime(item.time) || item.time.slice(0, 5))) || routine.find(r => r.title === item.title));
+    const task = await resolveItemTask(item);
     const key = task?.id || item.focusKey;
     if (!key) return;
+
+    const blockMin = Math.min(360, Math.max(1, Number(item.durationMinutes) || durationFromRange(item.time, 25)));
+    const blockSeconds = blockMin * 60;
+    const already = Number(focusLog[key] || 0);
+    const remaining = already >= blockSeconds ? blockSeconds : Math.max(1, blockSeconds - already);
 
     if (activeFocusId === key && running) {
       setRunning(false);
       persistFocusSeconds(key, focusLog[key] || 0);
-      const elapsedMin = Math.round((sessionLength - timer) / 60);
+      const elapsedMin = Math.max(1, Math.round((blockSeconds - timer) / 60));
       saveStudySession(item, elapsedMin);
       return;
     }
 
-    if (timer <= 0) setTimer(focusMinutes * 60);
+    setFocusMinutes(blockMin);
+    setTimer(remaining);
     setActiveFocusId(key);
     sessionStampRef.current = new Date().toISOString();
     setRunning(true);
-    flash(`Focus linked to ${item.title}`);
+    flash(`${item.title}: ${blockMin}m focus block`);
   };
 
   const toggleItem = async item => {
@@ -526,14 +647,11 @@ function App() {
     const previousDone = task?.done ?? false;
 
     try {
-      if (!task) {
-        const seed = routine.find(r => r.title === item.title);
-        if (seed) task = await ensureTask(seed);
-      }
-      if (!task) throw new Error('Task could not be created.');
+      if (!task) task = await resolveItemTask(item);
+      if (!task) throw new Error('This mission is not in your tracker yet. Wait a second and tap again.');
 
       const next = !previousDone;
-      setTasks(v => v.map(t => (t.id === task.id ? { ...t, done: next } : t)));
+      rememberTask({ ...task, done: next });
 
       const { data, error } = await supabase.from('tasks')
         .update({ done: next, completed_at: next ? new Date().toISOString() : null })
@@ -543,12 +661,10 @@ function App() {
         .single();
 
       if (error) throw error;
-      setTasks(v => v.map(t => (t.id === data.id ? { ...t, ...data } : t)));
+      rememberTask({ ...task, ...data });
       flash(next ? 'Task completed ✓' : 'Task reopened');
     } catch (error) {
-      if (task) {
-        setTasks(v => v.map(t => (t.id === task.id ? { ...t, done: previousDone } : t)));
-      }
+      if (task) rememberTask({ ...task, done: previousDone });
       flash('Could not save task: ' + error.message);
     } finally {
       setSaving('');
@@ -599,16 +715,34 @@ function App() {
   };
 
   const deleteTask = async id => {
-    if (!supabase || !user) return;
+    if (!supabase || !user || !id) return;
     const { error } = await supabase.from('tasks').delete().eq('id', id).eq('user_id', user.id);
-    if (error) flash(error.message); else { setTasks(v => v.filter(t => t.id !== id)); flash('Task removed'); }
+    if (error) flash(error.message);
+    else {
+      const next = tasksRef.current.filter(t => t.id !== id);
+      tasksRef.current = next;
+      setTasks(next);
+      flash('Task removed');
+    }
   };
 
-  const loadRoutine = async () => {
+  const removeItem = async item => {
+    const task = item.task?.id ? item.task : await resolveItemTask(item);
+    if (!task?.id) { flash('This mission is not saved yet.'); return; }
+    await deleteTask(task.id);
+  };
+
+  const loadRoutine = async (quiet = false) => {
     let failed = false;
     for (const r of shiftedRoutine(dayStart)) { if (!(await ensureTask(r))) failed = true; }
-    if (!failed) flash(`Daily routine loaded from ${dayStart}.`);
+    if (!quiet && !failed) flash(`Daily routine loaded from ${dayStart}.`);
   };
+
+  useEffect(() => {
+    if (!hydrated || !user || seededRef.current) return;
+    seededRef.current = true;
+    if (!tasksRef.current.length) loadRoutine(true);
+  }, [hydrated, user]);
 
   const saveProfileStart = async time => {
     if (!supabase || !user) return;
@@ -830,14 +964,17 @@ function App() {
               <div className="section-title" style={{ margin: 0 }}>Mission list</div>
               <button type="button" className="soft-button" onClick={() => setShowAddTask(true)}><Plus size={16} />Add</button>
             </div>
-            <p className="muted small mt-8" style={{ marginBottom: 10 }}>{completedCount}/{totalCount} blocks complete. Tap the dark clock to start focus on that mission.</p>
+            <p className="muted small mt-8" style={{ marginBottom: 10 }}>{completedCount}/{totalCount} blocks complete. Play starts a focus block for that mission's length.</p>
             <div className="progress"><span style={{ width: completionPct + '%' }} /></div>
 
             <div className="task-list mt-12">
               {allItems.map(item => {
-                const key = item.focusKey;
-                const focusing = running && activeFocusId === key;
-                const consumed = focusing ? sessionConsumed : Math.min(1, (focusLog[key] || 0) / sessionLength);
+                const key = item.task?.id || item.focusKey;
+                const focusing = running && (activeFocusId === key || activeFocusId === item.focusKey);
+                const blockSeconds = Math.max(60, (item.durationMinutes || focusMinutes) * 60);
+                const consumed = focusing
+                  ? Math.min(1, 1 - (timer / blockSeconds))
+                  : Math.min(1, (focusLog[key] || 0) / blockSeconds);
                 return (
                   <TaskRow
                     key={item.key}
@@ -845,8 +982,8 @@ function App() {
                     done={!!item.task?.done}
                     disabled={saving === 'task' || !user}
                     onToggle={toggleItem}
-                    onDelete={deleteTask}
-                    focusedSeconds={focusLog[key] || 0}
+                    onDelete={removeItem}
+                    focusedSeconds={focusLog[key] || focusLog[item.focusKey] || 0}
                     focusProgress={consumed}
                     focusing={focusing}
                     onFocusToggle={toggleFocusFor}
@@ -854,7 +991,7 @@ function App() {
                 );
               })}
             </div>
-            <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe a task left to delete it.</p>
+            <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe a mission left to delete it.</p>
             <button type="button" className="soft-button mt-12" style={{ width: '100%', justifyContent: 'center' }} onClick={loadRoutine}>
               <AlarmClock size={16} />Load routine into today's tracker
             </button>
@@ -893,20 +1030,39 @@ function App() {
 
         {tab === 'focus' && (
           <>
-            <div className="grid-2">
-              <div className="countdown-card" style={{ color: 'var(--accent-gate)' }}>
-                <div className="countdown-label"><Target size={14} />GATE 2027</div>
-                <div className="countdown-days">{daysUntil('2027-02-07')}</div>
-                <div className="countdown-sub">days left · 07 Feb 2027</div>
-              </div>
-              <div className="countdown-card" style={{ color: 'var(--accent-upsc)' }}>
-                <div className="countdown-label"><Target size={14} />UPSC CSE 2027</div>
-                <div className="countdown-days">{daysUntil('2027-05-30')}</div>
-                <div className="countdown-sub">days left · 30 May 2027</div>
+            <div className="card today-focus-hero">
+              <div className="countdown-label"><Clock size={16} />Focused today</div>
+              <div className="today-focus-time">{formatClockHMS(focusedToday)}</div>
+              <div className="countdown-sub">
+                {activeItem
+                  ? `${running ? 'Running' : 'Paused'} · ${activeItem.title} · ${Math.floor(timer / 60)}:${String(timer % 60).padStart(2, '0')} left`
+                  : 'Tap play on a mission clock to start a block.'}
               </div>
             </div>
 
-            <div className="card mt-16">
+            <div className="task-list mt-16">
+              {allItems.filter(item => (focusLog[item.task?.id || item.focusKey] || 0) > 0 || (running && activeFocusId === (item.task?.id || item.focusKey))).length
+                ? allItems.filter(item => (focusLog[item.task?.id || item.focusKey] || 0) > 0 || (running && activeFocusId === (item.task?.id || item.focusKey))).map(item => {
+                  const key = item.task?.id || item.focusKey;
+                  const seconds = focusLog[key] || 0;
+                  return (
+                    <div className="card" key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                      <div>
+                        <div className="task-name">{item.title}</div>
+                        <div className="task-time">{item.time}</div>
+                      </div>
+                      <strong className="mono" style={{ color: '#1553a5' }}>{formatFocus(seconds)}</strong>
+                    </div>
+                  );
+                })
+                : <div className="empty-state">No focused minutes yet today. Start a mission clock on Today.</div>}
+            </div>
+          </>
+        )}
+
+        {tab === 'chat' && (
+          <>
+            <div className="card mb-10">
               <div className="section-title" style={{ margin: '0 0 8px' }}>How much time do you actually have?</div>
               <div className="row" style={{ gap: 10 }}>
                 <Clock size={18} />
@@ -918,60 +1074,6 @@ function App() {
               </button>
             </div>
 
-            <div className="card mt-16">
-              <div className="between">
-                <div className="section-title" style={{ margin: 0 }}>Focus timer</div>
-                <div className="mono" style={{ fontSize: 24, color: 'var(--accent-gate)', fontWeight: 800 }}>
-                  {String(Math.floor(timer / 60)).padStart(2, '0')}:{String(timer % 60).padStart(2, '0')}
-                </div>
-              </div>
-              <p className="focus-linked">
-                {activeItem ? `Linked to ${activeItem.title}${running ? ' · running' : ' · paused'}` : 'Tap a mission clock to attach this timer to that task.'}
-              </p>
-
-              <div className="duration-row mt-12">
-                {[15, 25, 45, 60, 90].map(mins => (
-                  <button
-                    key={mins}
-                    type="button"
-                    disabled={running}
-                    className={`duration-chip ${focusMinutes === mins ? 'active' : ''}`}
-                    onClick={() => setFocusDuration(mins)}
-                  >
-                    {mins}m
-                  </button>
-                ))}
-                <div className="duration-custom">
-                  <input
-                    type="number"
-                    min="1"
-                    max="180"
-                    disabled={running}
-                    value={focusMinutes}
-                    onChange={e => setFocusDuration(e.target.value)}
-                  />
-                  <span className="muted small">min</span>
-                </div>
-              </div>
-
-              <div className="row mt-12" style={{ gap: 10 }}>
-                <button type="button" className="primary-button" style={{ flex: 1 }} onClick={() => {
-                  if (!running && timer <= 0) setTimer(focusMinutes * 60);
-                  if (!running) sessionStampRef.current = new Date().toISOString();
-                  setRunning(v => !v);
-                }}>
-                  {running ? <Pause size={16} /> : <Play size={16} />}{running ? 'Pause' : 'Start'}
-                </button>
-                <button type="button" className="soft-button" style={{ flex: 1 }} onClick={() => { setRunning(false); setTimer(focusMinutes * 60); }}>
-                  <RotateCcw size={16} />Reset
-                </button>
-              </div>
-            </div>
-          </>
-        )}
-
-        {tab === 'chat' && (
-          <>
             <div className="chat-window">
               {chatMessages.map(m => (
                 <div key={m.id} className={`message ${m.role}`}>
