@@ -1,8 +1,8 @@
 {
-  "name": "StudyBot — Command Center",
+  "name": "StudyBot",
   "short_name": "StudyBot",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#eef6ff",
+  "background_color": "#f3f8ff",
   "theme_color": "#2563eb"
 }

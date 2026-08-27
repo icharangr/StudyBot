@@ -9,3 +9,5 @@ StudyBot does not require email or magic-link sign-in. It creates an anonymous S
 
 ## Notes
 Enable **Anonymous Sign-Ins** in Supabase Authentication settings. Without that setting, the app will show a session bootstrap error instead of pretending it can save tasks.
+
+If you already ran an older schema, run the `alter table ... add column if not exists` statements in `supabase/schema.sql` so `day_start` and `focus_seconds` exist.

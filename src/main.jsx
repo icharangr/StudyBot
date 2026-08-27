@@ -1,10 +1,21 @@
 import React, { Component, useEffect, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
 import {
   Check, Clock, Plus, Sparkles, Target, LayoutDashboard, MessageCircle,
   Play, Pause, RotateCcw, AlarmClock, X, Send, Loader2, Trash2,
 } from 'lucide-react';
 import './styles.css';
 import { supabase } from './lib/supabase';
+import { timeToMinutes } from './lib/study-engine';
+import { fetchKickQuote, pickKickQuote } from './lib/quotes';
+import {
+  DEFAULT_DAY_START,
+  formatRange,
+  inferDayStartChange,
+  planDayIntelligently,
+  shiftClock,
+  shiftTasks,
+} from './lib/day-planner';
 
 const pad = n => String(n).padStart(2, '0');
 const today = () => {
@@ -14,36 +25,92 @@ const today = () => {
 const monthStart = () => today().slice(0, 7) + '-01';
 const daysUntil = d => Math.max(0, Math.ceil((new Date(d) - new Date()) / 86400000));
 const normTime = t => (t ? String(t).slice(0, 5) : null);
+const focusStorageKey = () => `studybot-focus-${today()}`;
+const dayStartKey = 'studybot-day-start';
 
-const ROUTINE = [
-  ['UPSC', '04:30–07:00', '04:30', 'UPSC', 'High', 'U', 'upsc'],
-  ['GATE', '07:00–08:30', '07:00', 'GATE', 'High', 'G', 'gate'],
+const ROUTINE_SEED = [
+  ['UPSC', '04:30', '07:00', 'UPSC', 'High', 'U', 'upsc'],
+  ['GATE', '07:00', '08:30', 'GATE', 'High', 'G', 'gate'],
   ['Supplements', '08:45', '08:45', 'Routine', 'Medium', 'S', 'routine'],
-  ['GATE', '09:00–11:00', '09:00', 'GATE', 'High', 'G', 'gate'],
-  ['Read / Re-Vision', '11:00–12:00', '11:00', 'Revision', 'High', 'R', 'study'],
-  ['UPSC', '12:00–14:00', '12:00', 'UPSC', 'High', 'U', 'upsc'],
-  ['Lunch', '14:00–14:30', '14:00', 'Routine', 'Low', 'L', 'routine'],
-  ['DSA', '14:30–17:00', '14:30', 'DSA', 'High', 'D', 'dsa'],
-  ['DSA', '18:00–20:00', '18:00', 'DSA', 'High', 'D', 'dsa'],
-  ['Current Affairs', '21:00–22:00', '21:00', 'Current Affairs', 'High', 'C', 'study'],
+  ['GATE', '09:00', '11:00', 'GATE', 'High', 'G', 'gate'],
+  ['Read / Re-Vision', '11:00', '12:00', 'Revision', 'High', 'R', 'study'],
+  ['UPSC', '12:00', '14:00', 'UPSC', 'High', 'U', 'upsc'],
+  ['Lunch', '14:00', '14:30', 'Routine', 'Low', 'L', 'routine'],
+  ['DSA', '14:30', '17:00', 'DSA', 'High', 'D', 'dsa'],
+  ['DSA', '18:00', '20:00', 'DSA', 'High', 'D', 'dsa'],
+  ['Current Affairs', '21:00', '22:00', 'Current Affairs', 'High', 'C', 'study'],
   ['Bed', '23:00', '23:00', 'Routine', 'Low', 'B', 'routine'],
-].map(([title, time, start, tag, priority, icon, tone]) => ({ title, time, start, tag, priority, icon, tone }));
-
-const QUOTES = [
-  'You said you wanted a different life. This is the part where you earn it.',
-  'Nobody is coming to do the work for you. Start the next block.',
-  'Stop negotiating with your excuses. Start the next block.',
-  'Your future is built by what you do when nobody is watching.',
-  'One focused block is enough to change the direction of today.',
 ];
-const ROUTINE_SOURCE = 'manual';
+
+function shiftedRoutine(dayStart = DEFAULT_DAY_START) {
+  const delta = (timeToMinutes(dayStart) ?? 4 * 60 + 30) - (timeToMinutes(DEFAULT_DAY_START) ?? 4 * 60 + 30);
+  return ROUTINE_SEED.map(([title, start, end, tag, priority, icon, tone]) => {
+    const nextStart = shiftClock(start, delta);
+    const nextEnd = shiftClock(end, delta);
+    const duration = Math.max(0, ((timeToMinutes(end) - timeToMinutes(start)) + 1440) % 1440);
+    return {
+      title,
+      start: nextStart,
+      end: nextEnd,
+      duration,
+      tag,
+      priority,
+      icon,
+      tone,
+      time: formatRange(nextStart, duration),
+    };
+  });
+}
+
 const TASK_TAGS = ['Personal', 'UPSC', 'GATE', 'DSA', 'Current Affairs', 'Revision', 'Routine'];
 const PRIORITIES = ['Low', 'Medium', 'High'];
 const TAG_TONE = {
   UPSC: 'upsc', GATE: 'gate', DSA: 'dsa', 'Current Affairs': 'study',
   Revision: 'study', Routine: 'routine', Personal: 'college',
 };
-const QUICK_PROMPTS = ["Plan my day", "What should I do next?", "Move DSA to 8 PM", "Mark my last GATE block done"];
+const QUICK_PROMPTS = [
+  'Plan my day',
+  'Start my day at 6:00 AM instead of 4:00 AM',
+  'What should I do next?',
+  'Move DSA to 8 PM',
+];
+
+function formatFocus(seconds) {
+  const s = Math.max(0, Number(seconds) || 0);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+function readFocusLog() {
+  try { return JSON.parse(localStorage.getItem(focusStorageKey()) || '{}'); } catch { return {}; }
+}
+
+function writeFocusLog(log) {
+  try { localStorage.setItem(focusStorageKey(), JSON.stringify(log)); } catch { /* ignore */ }
+}
+
+function FocusClock({ progress, active, onClick, label }) {
+  const pct = Math.min(1, Math.max(0, Number(progress) || 0));
+  const angle = pct * 360;
+  return (
+    <button
+      type="button"
+      className={`focus-clock ${active ? 'active' : ''}`}
+      onClick={onClick}
+      aria-label={label}
+      title={label}
+    >
+      <span
+        className="focus-clock-face"
+        style={{
+          background: `conic-gradient(from -90deg, #9ec5ff 0deg ${angle}deg, #0a2463 ${angle}deg 360deg)`,
+        }}
+      />
+    </button>
+  );
+}
 
 class AppErrorBoundary extends Component {
   state = { error: null };
@@ -87,13 +154,13 @@ function Sheet({ title, onClose, onSubmit, submitLabel = 'Save', children }) {
 const SWIPE_TRIGGER = 72;
 const SWIPE_MAX = 96;
 
-function TaskRow({ item, done, disabled, onToggle, onDelete }) {
+function TaskRow({ item, done, disabled, onToggle, onDelete, focusedSeconds, focusProgress, focusing, onFocusToggle }) {
   const [dragX, setDragX] = useState(0);
   const dragging = useRef(false);
   const startX = useRef(0);
   const startY = useRef(0);
-  const locked = useRef(null); // 'x' | 'y' | null while deciding gesture direction
-  const canSwipe = !item.routine && !!item.task;
+  const locked = useRef(null);
+  const canSwipe = !!item.task && !item.template;
 
   const onPointerDown = e => {
     if (!canSwipe || e.target.closest('button')) return;
@@ -130,7 +197,7 @@ function TaskRow({ item, done, disabled, onToggle, onDelete }) {
         </div>
       )}
       <div
-        className={`task-card ${done ? 'done' : ''}`}
+        className={`task-card ${done ? 'done' : ''} ${focusing ? 'focusing' : ''}`}
         style={{ transform: dragX ? `translateX(${dragX}px)` : undefined, transition: dragging.current ? 'none' : 'transform .2s ease' }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -143,7 +210,8 @@ function TaskRow({ item, done, disabled, onToggle, onDelete }) {
           <div className="task-time">{item.time}</div>
           <div className="pill-row">
             <span className={`pill cat-${item.tone}`}>{item.tag}</span>
-            {!item.routine && (
+            {focusedSeconds > 0 && <span className="focus-time">{formatFocus(focusedSeconds)} focused</span>}
+            {item.task && !item.template && (
               <button type="button" className="icon-button" style={{ width: 24, height: 24, minHeight: 0 }} onClick={() => onDelete(item.task.id)} aria-label={`Delete ${item.title}`}>
                 <Trash2 size={12} />
               </button>
@@ -151,6 +219,12 @@ function TaskRow({ item, done, disabled, onToggle, onDelete }) {
           </div>
         </div>
         <div className="check-wrap">
+          <FocusClock
+            progress={focusProgress}
+            active={focusing}
+            label={focusing ? `Pause focus on ${item.title}` : `Start focus on ${item.title}`}
+            onClick={e => { e.stopPropagation(); onFocusToggle(item); }}
+          />
           <button
             type="button"
             disabled={disabled}
@@ -175,26 +249,63 @@ function App() {
   const [tasks, setTasks] = useState([]);
   const [goals, setGoals] = useState([]);
   const [tab, setTab] = useState('today');
-  const [quote, setQuote] = useState(QUOTES[Math.floor(Math.random() * QUOTES.length)]);
+  const [quote, setQuote] = useState(() => pickKickQuote());
   const [toast, setToast] = useState('');
   const [saving, setSaving] = useState('');
   const [focusMinutes, setFocusMinutes] = useState(25);
   const [timer, setTimer] = useState(25 * 60);
   const [running, setRunning] = useState(false);
   const [hours, setHours] = useState(6);
+  const [dayStart, setDayStart] = useState(() => {
+    try { return localStorage.getItem(dayStartKey) || DEFAULT_DAY_START; } catch { return DEFAULT_DAY_START; }
+  });
+  const [focusLog, setFocusLog] = useState(() => readFocusLog());
+  const [activeFocusId, setActiveFocusId] = useState(null);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showAddGoal, setShowAddGoal] = useState(false);
   const [taskForm, setTaskForm] = useState({ title: '', priority: 'Medium', tag: 'Personal', time: '' });
   const [goalForm, setGoalForm] = useState({ title: '', target: 1 });
-
   const [chatMessages, setChatMessages] = useState([
-    { id: 'seed', role: 'bot', text: "Hey — I'm your StudyBot AI. Ask me to plan your day, move a block, or mark something done." },
+    { id: 'seed', role: 'bot', text: "Hey — I'm your StudyBot AI. Change your wake time, plan the day, move a block, or mark something done. The mission list will follow." },
   ]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef(null);
+  const quoteRef = useRef(quote);
+  const activeFocusRef = useRef(null);
+  const sessionStampRef = useRef(null);
+
+  quoteRef.current = quote;
+  activeFocusRef.current = activeFocusId;
 
   const flash = m => { setToast(String(m || 'Something went wrong')); setTimeout(() => setToast(''), 3500); };
+  const persistDayStart = value => {
+    setDayStart(value);
+    try { localStorage.setItem(dayStartKey, value); } catch { /* ignore */ }
+  };
+
+  const refreshQuote = async () => {
+    const next = await fetchKickQuote(quoteRef.current, supabase);
+    setQuote(next);
+  };
+
+  useEffect(() => {
+    refreshQuote();
+    const onVis = () => { if (document.visibilityState === 'visible') refreshQuote(); };
+    const onPageShow = () => refreshQuote();
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('focus', refreshQuote);
+    window.addEventListener('pageshow', onPageShow);
+    const id = setInterval(() => {
+      if (document.visibilityState === 'visible') refreshQuote();
+    }, 75000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('focus', refreshQuote);
+      window.removeEventListener('pageshow', onPageShow);
+      clearInterval(id);
+    };
+  }, []);
 
   useEffect(() => {
     if (!supabase) return;
@@ -242,14 +353,24 @@ function App() {
   const load = async () => {
     if (!supabase || !user) return;
     try {
-      const [a, b] = await Promise.all([
+      const [a, b, profile] = await Promise.all([
         supabase.from('tasks').select('*').eq('user_id', user.id).eq('task_date', today()).order('scheduled_time'),
         supabase.from('monthly_goals').select('*').eq('user_id', user.id).eq('month_start', monthStart()),
+        supabase.from('profiles').select('day_start').eq('id', user.id).maybeSingle(),
       ]);
       if (a.error) throw a.error;
       if (b.error) throw b.error;
       setTasks(a.data || []);
       setGoals(b.data || []);
+      const remoteStart = normTime(profile.data?.day_start);
+      if (remoteStart) persistDayStart(remoteStart);
+      const nextLog = { ...readFocusLog() };
+      for (const task of a.data || []) {
+        const stored = Number(task.focus_seconds || 0);
+        if (stored > (nextLog[task.id] || 0)) nextLog[task.id] = stored;
+      }
+      setFocusLog(nextLog);
+      writeFocusLog(nextLog);
     } catch (error) {
       flash(error.message);
     }
@@ -261,14 +382,30 @@ function App() {
     let current = today();
     const id = setInterval(() => {
       const now = today();
-      if (now !== current) { current = now; load(); }
+      if (now !== current) { current = now; load(); setFocusLog(readFocusLog()); }
     }, 60000);
     return () => clearInterval(id);
   }, [user]);
 
   useEffect(() => {
     if (!running) return;
-    const id = setInterval(() => setTimer(v => (v <= 1 ? (setRunning(false), 0) : v - 1)), 1000);
+    if (!sessionStampRef.current) sessionStampRef.current = new Date().toISOString();
+    const id = setInterval(() => {
+      setTimer(v => {
+        if (v <= 1) {
+          setRunning(false);
+          return 0;
+        }
+        return v - 1;
+      });
+      const key = activeFocusRef.current;
+      if (!key) return;
+      setFocusLog(prev => {
+        const next = { ...prev, [key]: (prev[key] || 0) + 1 };
+        writeFocusLog(next);
+        return next;
+      });
+    }, 1000);
     return () => clearInterval(id);
   }, [running]);
 
@@ -276,11 +413,30 @@ function App() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [chatMessages, chatLoading, tab]);
 
+  const persistFocusSeconds = async (taskId, seconds) => {
+    if (!supabase || !user || !taskId || String(taskId).startsWith('template:')) return;
+    const { error } = await supabase.from('tasks').update({ focus_seconds: seconds }).eq('id', taskId).eq('user_id', user.id);
+    if (error && !/focus_seconds/i.test(error.message)) flash(error.message);
+  };
+
+  const saveStudySession = async (taskItem, minutes) => {
+    if (!supabase || !user || minutes < 1) return;
+    await supabase.from('study_sessions').insert({
+      user_id: user.id,
+      started_at: sessionStampRef.current || new Date().toISOString(),
+      ended_at: new Date().toISOString(),
+      minutes,
+      subject: taskItem?.tag || taskItem?.title || 'Focus',
+    });
+  };
+
   const setFocusDuration = mins => {
     const clamped = Math.min(180, Math.max(1, Math.round(Number(mins) || 0)));
     setFocusMinutes(clamped);
     if (!running) setTimer(clamped * 60);
   };
+
+  const routine = shiftedRoutine(dayStart);
 
   const findRoutineTask = r => tasks.find(t => t.title === r.title && normTime(t.scheduled_time) === r.start);
 
@@ -296,7 +452,7 @@ function App() {
       scheduled_time: r.start,
       priority: r.priority,
       tag: r.tag,
-      source: ROUTINE_SOURCE,
+      source: 'routine',
       done: false,
     }).select().single();
 
@@ -308,14 +464,58 @@ function App() {
     return data;
   };
 
-  const manualItems = tasks.filter(t => !ROUTINE.some(r => r.title === t.title && normTime(t.scheduled_time) === r.start));
-  const allItems = [
-    ...ROUTINE.map(r => ({ key: r.title + r.start, title: r.title, time: r.time, tag: r.tag, tone: r.tone, icon: r.icon, routine: r, task: findRoutineTask(r) })),
-    ...manualItems.map(t => ({ key: t.id, title: t.title, time: t.scheduled_time ? normTime(t.scheduled_time) : 'Anytime', tag: t.tag, tone: TAG_TONE[t.tag] || 'routine', icon: (t.tag || 'T')[0], routine: null, task: t })),
-  ];
+  const toItem = (task, template) => {
+    const start = normTime(task.scheduled_time) || template?.start;
+    const duration = Number(task.duration_minutes) || template?.duration || 0;
+    return {
+      key: task.id || `template:${template?.title}:${template?.start}`,
+      title: task.title,
+      time: start ? formatRange(start, duration) : 'Anytime',
+      tag: task.tag,
+      tone: TAG_TONE[task.tag] || template?.tone || 'routine',
+      icon: template?.icon || (task.tag || 'T')[0],
+      template: !task.id,
+      task: task.id ? task : null,
+      focusKey: task.id || `template:${template?.title}:${template?.start}`,
+    };
+  };
+
+  const allItems = tasks.length
+    ? [...tasks]
+      .sort((a, b) => (a.scheduled_time || '99:99').localeCompare(b.scheduled_time || '99:99'))
+      .map(task => {
+        const template = routine.find(r => r.title === task.title && r.start === normTime(task.scheduled_time))
+          || routine.find(r => r.title === task.title);
+        return toItem(task, template);
+      })
+    : routine.map(r => toItem({ title: r.title, scheduled_time: r.start, tag: r.tag, priority: r.priority }, r));
+
   const totalCount = allItems.length;
   const completedCount = allItems.filter(i => i.task?.done).length;
   const completionPct = totalCount ? Math.round((completedCount / totalCount) * 100) : 0;
+  const sessionLength = Math.max(1, focusMinutes * 60);
+  const sessionConsumed = 1 - (timer / sessionLength);
+
+  const toggleFocusFor = async item => {
+    let task = item.task;
+    if (!task && item.template) task = await ensureTask(routine.find(r => r.title === item.title && r.start === (normTime(item.time) || item.time.slice(0, 5))) || routine.find(r => r.title === item.title));
+    const key = task?.id || item.focusKey;
+    if (!key) return;
+
+    if (activeFocusId === key && running) {
+      setRunning(false);
+      persistFocusSeconds(key, focusLog[key] || 0);
+      const elapsedMin = Math.round((sessionLength - timer) / 60);
+      saveStudySession(item, elapsedMin);
+      return;
+    }
+
+    if (timer <= 0) setTimer(focusMinutes * 60);
+    setActiveFocusId(key);
+    sessionStampRef.current = new Date().toISOString();
+    setRunning(true);
+    flash(`Focus linked to ${item.title}`);
+  };
 
   const toggleItem = async item => {
     if (saving) return;
@@ -326,7 +526,10 @@ function App() {
     const previousDone = task?.done ?? false;
 
     try {
-      if (!task && item.routine) task = await ensureTask(item.routine);
+      if (!task) {
+        const seed = routine.find(r => r.title === item.title);
+        if (seed) task = await ensureTask(seed);
+      }
       if (!task) throw new Error('Task could not be created.');
 
       const next = !previousDone;
@@ -403,20 +606,76 @@ function App() {
 
   const loadRoutine = async () => {
     let failed = false;
-    for (const r of ROUTINE) { if (!(await ensureTask(r))) failed = true; }
-    if (!failed) flash('Daily routine is ready.');
+    for (const r of shiftedRoutine(dayStart)) { if (!(await ensureTask(r))) failed = true; }
+    if (!failed) flash(`Daily routine loaded from ${dayStart}.`);
+  };
+
+  const saveProfileStart = async time => {
+    if (!supabase || !user) return;
+    await supabase.from('profiles').upsert({ id: user.id, day_start: time, timezone: 'Asia/Kolkata' });
+  };
+
+  const applyDayStart = async (newStart, oldStart = dayStart) => {
+    const from = normTime(oldStart) || dayStart;
+    const to = normTime(newStart);
+    if (!to) return;
+    const delta = (timeToMinutes(to) ?? 0) - (timeToMinutes(from) ?? 0);
+    persistDayStart(to);
+    saveProfileStart(to);
+
+    if (!tasks.length) {
+      flash(`Day now starts at ${to}. Mission list shifted.`);
+      return;
+    }
+
+    const next = shiftTasks(tasks, delta);
+    setTasks(next);
+    if (supabase && user) {
+      for (const task of next) {
+        const { error } = await supabase.from('tasks')
+          .update({ scheduled_time: task.scheduled_time, task_date: task.task_date || today() })
+          .eq('id', task.id)
+          .eq('user_id', user.id);
+        if (error) flash('Could not move a block: ' + error.message);
+      }
+    }
+    flash(`Day now starts at ${to}. Every timed block moved with it.`);
+  };
+
+  const replanDay = async currentTasks => {
+    const source = currentTasks || tasks;
+    const { tasks: next, plan } = planDayIntelligently(source, hours, today());
+    setTasks(next);
+    if (supabase && user) {
+      for (const task of next) {
+        await supabase.from('tasks')
+          .update({ scheduled_time: task.scheduled_time, task_date: task.task_date || today() })
+          .eq('id', task.id)
+          .eq('user_id', user.id);
+      }
+    }
+    flash(plan.overloaded
+      ? `Day packed. ${plan.deferred} lower-value block(s) could not fit into ${hours}h.`
+      : `Day packed into ${hours} focused hours.`);
+    return next;
   };
 
   const applyOperations = async ops => {
+    let local = [...tasks];
+    let planned = false;
+    const bulkShift = ops.some(o => o.op === 'set_day_start' || o.op === 'shift_day');
+
     for (const op of ops) {
       try {
         if (op.op === 'create') {
-          const { error } = await supabase.from('tasks').insert({
+          const row = {
             user_id: user.id, title: op.title, task_date: op.task_date || today(),
             scheduled_time: op.time || null, priority: op.priority || 'Medium',
             tag: op.tag || 'Personal', source: 'ai', done: false,
-          });
+          };
+          const { data, error } = await supabase.from('tasks').insert(row).select().single();
           if (error) throw error;
+          local = [...local, data];
         } else if (op.op === 'update') {
           const patch = {};
           if (op.new_title) patch.title = op.new_title;
@@ -425,22 +684,52 @@ function App() {
           if (Object.keys(patch).length) {
             const { error } = await supabase.from('tasks').update(patch).eq('id', op.task_id).eq('user_id', user.id);
             if (error) throw error;
+            local = local.map(t => (t.id === op.task_id ? { ...t, ...patch } : t));
           }
         } else if (op.op === 'reschedule') {
-          const { error } = await supabase.from('tasks').update({ task_date: op.task_date, scheduled_time: op.time || null }).eq('id', op.task_id).eq('user_id', user.id);
+          if (bulkShift) continue;
+          const { error } = await supabase.from('tasks').update({ task_date: op.task_date || today(), scheduled_time: op.time || null }).eq('id', op.task_id).eq('user_id', user.id);
           if (error) throw error;
+          local = local.map(t => (t.id === op.task_id ? { ...t, task_date: op.task_date || today(), scheduled_time: op.time || null } : t));
         } else if (op.op === 'delete') {
           const { error } = await supabase.from('tasks').delete().eq('id', op.task_id).eq('user_id', user.id);
           if (error) throw error;
+          local = local.filter(t => t.id !== op.task_id);
         } else if (op.op === 'complete') {
           const { error } = await supabase.from('tasks').update({ done: true, completed_at: new Date().toISOString() }).eq('id', op.task_id).eq('user_id', user.id);
           if (error) throw error;
+          local = local.map(t => (t.id === op.task_id ? { ...t, done: true } : t));
+        } else if (op.op === 'set_day_start') {
+          const to = normTime(op.time);
+          if (to) {
+            const delta = (timeToMinutes(to) ?? 0) - (timeToMinutes(dayStart) ?? 0);
+            persistDayStart(to);
+            saveProfileStart(to);
+            local = shiftTasks(local, delta);
+            for (const task of local) {
+              await supabase.from('tasks').update({ scheduled_time: task.scheduled_time }).eq('id', task.id).eq('user_id', user.id);
+            }
+          }
+        } else if (op.op === 'shift_day') {
+          const delta = Number(op.delta_minutes) || 0;
+          const nextStart = shiftClock(dayStart, delta);
+          persistDayStart(nextStart);
+          saveProfileStart(nextStart);
+          local = shiftTasks(local, delta);
+          for (const task of local) {
+            await supabase.from('tasks').update({ scheduled_time: task.scheduled_time }).eq('id', task.id).eq('user_id', user.id);
+          }
+        } else if (op.op === 'plan_day') {
+          planned = true;
         }
       } catch (e) {
         flash('AI action failed: ' + e.message);
       }
     }
-    load();
+
+    setTasks(local);
+    if (planned) await replanDay(local);
+    else await load();
   };
 
   const sendCommand = async text => {
@@ -450,11 +739,12 @@ function App() {
     setChatMessages(v => [...v, userMsg]);
     setChatInput('');
     setChatLoading(true);
+    const inferred = inferDayStartChange(command, dayStart);
     try {
       const res = await fetch('/api/ai-task', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command, tasks, goals, today: today(), availableHours: hours }),
+        body: JSON.stringify({ command, tasks, goals, today: today(), availableHours: hours, dayStart }),
       });
       const raw = await res.text();
       let data;
@@ -462,13 +752,28 @@ function App() {
       if (!res.ok) throw new Error(data.error || 'AI request failed');
       const ops = Array.isArray(data.operations) ? data.operations : [];
       const needsConfirmation = !!data.needs_confirmation;
+      const hasScheduleOps = ops.some(o => ['reschedule', 'shift_day', 'set_day_start', 'plan_day', 'create'].includes(o.op));
       setChatMessages(v => [...v, {
         id: crypto.randomUUID(), role: 'bot', text: data.message || 'Done.',
         operations: ops, needsConfirmation, resolved: !needsConfirmation,
       }]);
       if (ops.length && !needsConfirmation) await applyOperations(ops);
+      if (!needsConfirmation && inferred && !hasScheduleOps) {
+        await applyDayStart(inferred.newStart, inferred.oldStart);
+        if (/plan|entire day|rest of (the )?day|intelligently/i.test(command)) await replanDay();
+      }
     } catch (error) {
-      setChatMessages(v => [...v, { id: crypto.randomUUID(), role: 'bot', text: "Couldn't reach the AI — " + error.message }]);
+      if (inferred) {
+        await applyDayStart(inferred.newStart, inferred.oldStart);
+        if (/plan|entire day|rest of (the )?day/i.test(command)) await replanDay();
+        setChatMessages(v => [...v, {
+          id: crypto.randomUUID(),
+          role: 'bot',
+          text: `Mission list updated locally — day now starts at ${inferred.newStart}. ${error.message}`,
+        }]);
+      } else {
+        setChatMessages(v => [...v, { id: crypto.randomUUID(), role: 'bot', text: "Couldn't reach the AI — " + error.message }]);
+      }
     } finally {
       setChatLoading(false);
     }
@@ -482,6 +787,8 @@ function App() {
     flash('Applied.');
   };
   const dismissMessage = id => setChatMessages(v => v.map(m => (m.id === id ? { ...m, resolved: true, dismissed: true } : m)));
+
+  const activeItem = allItems.find(i => i.focusKey === activeFocusId || i.task?.id === activeFocusId);
 
   if (!authReady) {
     return (
@@ -501,12 +808,12 @@ function App() {
         <div className="quote-banner">
           <Sparkles size={15} className="quote-icon" />
           <div className="quote">{quote}</div>
-          <button type="button" className="icon-button" onClick={() => setQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)])}><Sparkles size={16} /></button>
+          <button type="button" className="icon-button" onClick={refreshQuote} aria-label="Fetch a new kick-start line"><Sparkles size={16} /></button>
         </div>
         <div className="hero-row mt-8">
           <div className="greeting">
             <h1>{tab === 'today' ? 'Good to see you.' : tab === 'chat' ? 'StudyBot AI' : tab === 'goals' ? 'Goals that matter' : 'Focus'}</h1>
-            <div className="date-line">{today()}</div>
+            <div className="date-line">{today()} · day starts {dayStart}</div>
           </div>
         </div>
         <div className="mini-stats">
@@ -523,20 +830,29 @@ function App() {
               <div className="section-title" style={{ margin: 0 }}>Mission list</div>
               <button type="button" className="soft-button" onClick={() => setShowAddTask(true)}><Plus size={16} />Add</button>
             </div>
-            <p className="muted small mt-8" style={{ marginBottom: 10 }}>{completedCount}/{totalCount} blocks complete. Tap only when it's actually done.</p>
+            <p className="muted small mt-8" style={{ marginBottom: 10 }}>{completedCount}/{totalCount} blocks complete. Tap the dark clock to start focus on that mission.</p>
             <div className="progress"><span style={{ width: completionPct + '%' }} /></div>
 
             <div className="task-list mt-12">
-              {allItems.map(item => (
-                <TaskRow
-                  key={item.key}
-                  item={item}
-                  done={!!item.task?.done}
-                  disabled={saving === 'task' || !user}
-                  onToggle={toggleItem}
-                  onDelete={deleteTask}
-                />
-              ))}
+              {allItems.map(item => {
+                const key = item.focusKey;
+                const focusing = running && activeFocusId === key;
+                const consumed = focusing ? sessionConsumed : Math.min(1, (focusLog[key] || 0) / sessionLength);
+                return (
+                  <TaskRow
+                    key={item.key}
+                    item={item}
+                    done={!!item.task?.done}
+                    disabled={saving === 'task' || !user}
+                    onToggle={toggleItem}
+                    onDelete={deleteTask}
+                    focusedSeconds={focusLog[key] || 0}
+                    focusProgress={consumed}
+                    focusing={focusing}
+                    onFocusToggle={toggleFocusFor}
+                  />
+                );
+              })}
             </div>
             <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe a task left to delete it.</p>
             <button type="button" className="soft-button mt-12" style={{ width: '100%', justifyContent: 'center' }} onClick={loadRoutine}>
@@ -597,7 +913,7 @@ function App() {
                 <input type="number" min="1" max="16" value={hours} onChange={e => setHours(e.target.value)} style={{ width: 70 }} />
                 <span className="muted small">hours available today</span>
               </div>
-              <button type="button" className="primary-button mt-12" style={{ width: '100%' }} onClick={() => flash(`Plan protected for ${hours} focused hours.`)}>
+              <button type="button" className="primary-button mt-12" style={{ width: '100%' }} onClick={() => replanDay()}>
                 <Sparkles size={16} />Build my day
               </button>
             </div>
@@ -609,6 +925,9 @@ function App() {
                   {String(Math.floor(timer / 60)).padStart(2, '0')}:{String(timer % 60).padStart(2, '0')}
                 </div>
               </div>
+              <p className="focus-linked">
+                {activeItem ? `Linked to ${activeItem.title}${running ? ' · running' : ' · paused'}` : 'Tap a mission clock to attach this timer to that task.'}
+              </p>
 
               <div className="duration-row mt-12">
                 {[15, 25, 45, 60, 90].map(mins => (
@@ -636,7 +955,11 @@ function App() {
               </div>
 
               <div className="row mt-12" style={{ gap: 10 }}>
-                <button type="button" className="primary-button" style={{ flex: 1 }} onClick={() => setRunning(v => !v)}>
+                <button type="button" className="primary-button" style={{ flex: 1 }} onClick={() => {
+                  if (!running && timer <= 0) setTimer(focusMinutes * 60);
+                  if (!running) sessionStampRef.current = new Date().toISOString();
+                  setRunning(v => !v);
+                }}>
                   {running ? <Pause size={16} /> : <Play size={16} />}{running ? 'Pause' : 'Start'}
                 </button>
                 <button type="button" className="soft-button" style={{ flex: 1 }} onClick={() => { setRunning(false); setTimer(focusMinutes * 60); }}>
