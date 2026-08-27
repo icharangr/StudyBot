@@ -26,7 +26,17 @@ const monthStart = () => today().slice(0, 7) + '-01';
 const daysUntil = d => Math.max(0, Math.ceil((new Date(d) - new Date()) / 86400000));
 const normTime = t => (t ? String(t).slice(0, 5) : null);
 const focusStorageKey = () => `studybot-focus-${today()}`;
+const clearedDayKey = () => `studybot-cleared-${today()}`;
 const dayStartKey = 'studybot-day-start';
+const isDayCleared = () => {
+  try { return localStorage.getItem(clearedDayKey()) === '1'; } catch { return false; }
+};
+const markDayCleared = cleared => {
+  try {
+    if (cleared) localStorage.setItem(clearedDayKey(), '1');
+    else localStorage.removeItem(clearedDayKey());
+  } catch { /* ignore */ }
+};
 
 const ROUTINE_SEED = [
   ['UPSC', '04:30', '07:00', 'UPSC', 'High', 'U', 'upsc'],
@@ -589,15 +599,13 @@ function App() {
     };
   };
 
-  const allItems = tasks.length
-    ? [...tasks]
-      .sort((a, b) => (a.scheduled_time || '99:99').localeCompare(b.scheduled_time || '99:99'))
-      .map(task => {
-        const template = routine.find(r => r.title === task.title && r.start === normTime(task.scheduled_time))
-          || routine.find(r => r.title === task.title);
-        return toItem(task, template);
-      })
-    : routine.map(r => toItem({ title: r.title, scheduled_time: r.start, tag: r.tag, priority: r.priority }, r));
+  const allItems = [...tasks]
+    .sort((a, b) => (a.scheduled_time || '99:99').localeCompare(b.scheduled_time || '99:99'))
+    .map(task => {
+      const template = routine.find(r => r.title === task.title && r.start === normTime(task.scheduled_time))
+        || routine.find(r => r.title === task.title);
+      return toItem(task, template);
+    });
 
   const totalCount = allItems.length;
   const completedCount = allItems.filter(i => i.task?.done).length;
@@ -709,7 +717,12 @@ function App() {
       user_id: user.id, title, task_date: today(), scheduled_time: taskForm.time || null,
       priority: taskForm.priority, tag: taskForm.tag || 'Personal', source: 'manual', done: false,
     });
-    if (error) flash(error.message); else { flash('Task added'); load(); }
+    if (error) flash(error.message);
+    else {
+      markDayCleared(false);
+      flash('Task added');
+      load();
+    }
     setShowAddTask(false);
     setTaskForm({ title: '', priority: 'Medium', tag: 'Personal', time: '' });
   };
@@ -722,7 +735,8 @@ function App() {
       const next = tasksRef.current.filter(t => t.id !== id);
       tasksRef.current = next;
       setTasks(next);
-      flash('Task removed');
+      if (!next.length) markDayCleared(true);
+      flash(next.length ? 'Task removed' : 'All missions cleared for today.');
     }
   };
 
@@ -733,6 +747,7 @@ function App() {
   };
 
   const loadRoutine = async (quiet = false) => {
+    markDayCleared(false);
     let failed = false;
     for (const r of shiftedRoutine(dayStart)) { if (!(await ensureTask(r))) failed = true; }
     if (!quiet && !failed) flash(`Daily routine loaded from ${dayStart}.`);
@@ -741,7 +756,7 @@ function App() {
   useEffect(() => {
     if (!hydrated || !user || seededRef.current) return;
     seededRef.current = true;
-    if (!tasksRef.current.length) loadRoutine(true);
+    if (!tasksRef.current.length && !isDayCleared()) loadRoutine(true);
   }, [hydrated, user]);
 
   const saveProfileStart = async time => {
@@ -862,6 +877,7 @@ function App() {
     }
 
     setTasks(local);
+    markDayCleared(!local.length);
     if (planned) await replanDay(local);
     else await load();
   };
@@ -964,35 +980,43 @@ function App() {
               <div className="section-title" style={{ margin: 0 }}>Mission list</div>
               <button type="button" className="soft-button" onClick={() => setShowAddTask(true)}><Plus size={16} />Add</button>
             </div>
-            <p className="muted small mt-8" style={{ marginBottom: 10 }}>{completedCount}/{totalCount} blocks complete. Play starts a focus block for that mission's length.</p>
-            <div className="progress"><span style={{ width: completionPct + '%' }} /></div>
-
-            <div className="task-list mt-12">
-              {allItems.map(item => {
-                const key = item.task?.id || item.focusKey;
-                const focusing = running && (activeFocusId === key || activeFocusId === item.focusKey);
-                const blockSeconds = Math.max(60, (item.durationMinutes || focusMinutes) * 60);
-                const consumed = focusing
-                  ? Math.min(1, 1 - (timer / blockSeconds))
-                  : Math.min(1, (focusLog[key] || 0) / blockSeconds);
-                return (
-                  <TaskRow
-                    key={item.key}
-                    item={item}
-                    done={!!item.task?.done}
-                    disabled={saving === 'task' || !user}
-                    onToggle={toggleItem}
-                    onDelete={removeItem}
-                    focusedSeconds={focusLog[key] || focusLog[item.focusKey] || 0}
-                    focusProgress={consumed}
-                    focusing={focusing}
-                    onFocusToggle={toggleFocusFor}
-                  />
-                );
-              })}
-            </div>
-            <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe a mission left to delete it.</p>
-            <button type="button" className="soft-button mt-12" style={{ width: '100%', justifyContent: 'center' }} onClick={loadRoutine}>
+            {allItems.length ? (
+              <>
+                <p className="muted small mt-8" style={{ marginBottom: 10 }}>{completedCount}/{totalCount} blocks complete. Play starts a focus block for that mission's length.</p>
+                <div className="progress"><span style={{ width: completionPct + '%' }} /></div>
+                <div className="task-list mt-12">
+                  {allItems.map(item => {
+                    const key = item.task?.id || item.focusKey;
+                    const focusing = running && (activeFocusId === key || activeFocusId === item.focusKey);
+                    const blockSeconds = Math.max(60, (item.durationMinutes || focusMinutes) * 60);
+                    const consumed = focusing
+                      ? Math.min(1, 1 - (timer / blockSeconds))
+                      : Math.min(1, (focusLog[key] || 0) / blockSeconds);
+                    return (
+                      <TaskRow
+                        key={item.key}
+                        item={item}
+                        done={!!item.task?.done}
+                        disabled={saving === 'task' || !user}
+                        onToggle={toggleItem}
+                        onDelete={removeItem}
+                        focusedSeconds={focusLog[key] || focusLog[item.focusKey] || 0}
+                        focusProgress={consumed}
+                        focusing={focusing}
+                        onFocusToggle={toggleFocusFor}
+                      />
+                    );
+                  })}
+                </div>
+                <p className="small muted mt-8" style={{ textAlign: 'center' }}>Swipe a mission left to delete it.</p>
+              </>
+            ) : (
+              <div className="empty-state mt-12">
+                <div className="task-name" style={{ marginBottom: 6 }}>No missions for today.</div>
+                You cleared the deck. Enjoy the open day — or load your routine when you are ready.
+              </div>
+            )}
+            <button type="button" className="soft-button mt-12" style={{ width: '100%', justifyContent: 'center' }} onClick={() => loadRoutine()}>
               <AlarmClock size={16} />Load routine into today's tracker
             </button>
           </>
