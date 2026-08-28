@@ -186,6 +186,7 @@ input, select { font-size: 16px; }
 
 .goal-card { border-left:4px solid var(--accent-study); }
 .goal-card.gate { border-left-color:var(--accent-gate); }
+.goal-card.rolled-goal { border-left-color:#8b5cf6; background:#faf5ff; }
 .goal-card.dsa { border-left-color:var(--accent-dsa); }
 .goal-card.upsc { border-left-color:var(--accent-upsc); }
 .goals-list { display:grid; gap:10px; }
@@ -193,6 +194,7 @@ input, select { font-size: 16px; }
 .heatmap { margin:0 0 14px; padding:11px; border:1px solid var(--border-card); border-radius:12px; background:var(--bg-card); box-shadow:var(--shadow-card); }
 .heatmap-head { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:9px; font-size:.78rem; }
 .heatmap-head span { color:var(--text-secondary); font-size:.62rem; white-space:nowrap; }
+.heatmap-weekdays { display:grid; grid-template-columns:repeat(7, minmax(0,1fr)); gap:6px; margin:0 0 4px; color:var(--text-muted); font-size:.58rem; text-align:center; }
 .heatmap-grid { display:grid; grid-template-columns:repeat(7, minmax(0, 1fr)); gap:6px; }
 .heat-cell { min-height:44px; display:grid; place-items:center; align-content:center; gap:1px; padding:2px; border:0; border-radius:8px; font-size:.6rem; color:#fff; }
 .heat-cell b { font-size:.76rem; }

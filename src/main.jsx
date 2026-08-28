@@ -79,7 +79,7 @@ const TAG_EMOJI = {
   UPSC: '📚', GATE: '⚙️', DSA: '💻', 'Current Affairs': '🗞️', Revision: '📝', Routine: '✨', Personal: '🧩',
 };
 const emojiFor = tag => TAG_EMOJI[tag] || '🎯';
-const withEmoji = (title, tag) => /[\u{1F300}-\u{1FAFF}]/u.test(String(title)) ? title : `${emojiFor(tag)} ${title}`;
+const plainTitle = title => String(title || '').replace(/^[\u{1F000}-\u{1FAFF}\u2600-\u27BF]\uFE0F?\s*/u, '');
 const QUICK_PROMPTS = [
   'Plan my day',
   'Start my day at 6:00 AM instead of 4:00 AM',
@@ -149,7 +149,7 @@ function FocusClock({ progress, active, running, onClick, label }) {
   );
 }
 
-function HeatMap({ title, days, history, onSelect }) {
+function HeatMap({ title, days, history, onSelect, showWeekdays = false }) {
   const byDay = new Map();
   for (const task of history) {
     const list = byDay.get(task.task_date) || [];
@@ -159,6 +159,7 @@ function HeatMap({ title, days, history, onSelect }) {
   return (
     <section className="heatmap" aria-label={title}>
       <div className="heatmap-head"><strong>{title}</strong><span>🔴 none · 🟠 partial · 🟢 complete</span></div>
+      {showWeekdays && <div className="heatmap-weekdays">{['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(day => <span key={day}>{day}</span>)}</div>}
       <div className="heatmap-grid">
         {days.map(day => {
           const list = byDay.get(day.key) || [];
@@ -483,21 +484,40 @@ function App() {
     if (!supabase || !user) return;
     try {
       const rollover = await supabase.from('tasks')
-        .update({ task_date: today(), source: 'rollover' })
+        .update({ task_date: today(), notes: 'rolled-over' })
         .eq('user_id', user.id).lt('task_date', today()).eq('done', false);
       if (rollover.error) throw rollover.error;
       const now = new Date();
       const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay() + 6) % 7));
       const weekFrom = `${monday.getFullYear()}-${pad(monday.getMonth() + 1)}-${pad(monday.getDate())}`;
       const monthFrom = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`;
-      const [a, b] = await Promise.all([
+      const previous = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const previousMonth = `${previous.getFullYear()}-${pad(previous.getMonth() + 1)}-01`;
+      const [a, b, priorGoals] = await Promise.all([
         supabase.from('tasks').select('*').eq('user_id', user.id).eq('task_date', today()).order('scheduled_time'),
         supabase.from('monthly_goals').select('*').eq('user_id', user.id).eq('month_start', monthStart()),
+        supabase.from('monthly_goals').select('*').eq('user_id', user.id).eq('month_start', previousMonth),
       ]);
       if (a.error) throw a.error;
       if (b.error) throw b.error;
+      if (priorGoals.error) throw priorGoals.error;
+      const currentGoals = b.data || [];
+      const carryRows = (priorGoals.data || [])
+        .filter(goal => Number(goal.completed_units || 0) < Number(goal.target_units || 1))
+        .filter(goal => !currentGoals.some(existing => existing.title === goal.title))
+        .map(goal => ({
+          user_id: user.id, month_start: monthStart(), title: goal.title, category: goal.category,
+          target_units: goal.target_units, completed_units: 0, deadline: goal.deadline,
+          next_action: goal.next_action, progress: 0, color: 'purple',
+        }));
+      let carriedGoals = [];
+      if (carryRows.length) {
+        const carry = await supabase.from('monthly_goals').insert(carryRows).select();
+        if (carry.error) throw carry.error;
+        carriedGoals = carry.data || [];
+      }
       setTasks(a.data || []);
-      setGoals(b.data || []);
+      setGoals([...currentGoals, ...carriedGoals]);
       const history = await supabase.from('tasks').select('task_date,done').eq('user_id', user.id).gte('task_date', monthFrom).order('task_date');
       if (!history.error) {
         setWeekHistory((history.data || []).filter(t => t.task_date >= weekFrom));
@@ -658,7 +678,7 @@ function App() {
     const timeLabel = start ? formatRange(start, duration) : 'Anytime';
     return {
       key: task.id || `template:${template?.title}:${template?.start}`,
-      title: withEmoji(task.title, task.tag),
+      title: plainTitle(task.title),
       time: timeLabel,
       start,
       durationMinutes: duration > 0 ? duration : durationFromRange(timeLabel, 25),
@@ -669,7 +689,7 @@ function App() {
       seed: template || null,
       task: task.id ? task : null,
       focusKey: task.id || `template:${template?.title}:${template?.start}`,
-      rolled: task.source === 'rollover',
+      rolled: task.notes === 'rolled-over',
     };
   };
 
@@ -788,7 +808,7 @@ function App() {
     const title = taskForm.title.trim();
     if (!title || !supabase || !user) return;
     const { error } = await supabase.from('tasks').insert({
-      user_id: user.id, title: withEmoji(title, taskForm.tag), task_date: today(), scheduled_time: taskForm.time || null,
+      user_id: user.id, title, task_date: today(), scheduled_time: taskForm.time || null,
       priority: taskForm.priority, tag: taskForm.tag || 'Personal', source: 'manual', done: false,
     });
     if (error) flash(error.message);
@@ -853,7 +873,7 @@ function App() {
     <div className="day-history card">
       <div className="between"><strong>📜 {selectedDay} history</strong><button type="button" className="icon-button" onClick={() => setSelectedDay(null)} aria-label="Close day history"><X size={16} /></button></div>
       {historyLoading ? <div className="small muted mt-8">Loading tasks…</div> : selectedDayTasks.length ? (
-        <div className="day-history-list mt-8">{selectedDayTasks.map(task => <div key={task.id} className={`day-history-task ${task.done ? 'done' : ''}`}><span>{withEmoji(task.title, task.tag)}</span><small>{formatRange(normTime(task.scheduled_time), 0)} · {task.done ? '✅ done' : '⬜ pending'}</small></div>)}</div>
+        <div className="day-history-list mt-8">{selectedDayTasks.map(task => <div key={task.id} className={`day-history-task ${task.done ? 'done' : ''}`}><span>{emojiFor(task.tag)} {plainTitle(task.title)}</span><small>{formatRange(normTime(task.scheduled_time), 0)} · {task.done ? '✅ done' : '⬜ pending'}</small></div>)}</div>
       ) : <div className="empty-state mt-8">No tasks are available for this day. 🌿</div>}
     </div>
   );
@@ -930,7 +950,7 @@ function App() {
       try {
         if (op.op === 'create') {
           const row = {
-            user_id: user.id, title: withEmoji(op.title, op.tag), task_date: op.task_date || today(),
+            user_id: user.id, title: op.title, task_date: op.task_date || today(),
             scheduled_time: op.time || null, priority: op.priority || 'Medium',
             tag: op.tag || 'Personal', source: 'ai', done: false,
           };
@@ -1147,7 +1167,7 @@ function App() {
 
         {tab === 'goals' && (
           <>
-            <HeatMap title="🗓️ This month" days={monthlyDays} history={monthHistory} onSelect={inspectDay} />
+            <HeatMap title="🗓️ This month" days={monthlyDays} history={monthHistory} onSelect={inspectDay} showWeekdays />
             {dayHistoryPanel}
             <div className="between">
               <div className="section-title" style={{ margin: 0 }}>🌟 Month</div>
@@ -1159,7 +1179,7 @@ function App() {
                 const done = Number(goal.completed_units || 0) >= target;
                 const pct = done ? 100 : Math.round((Number(goal.completed_units || 0) / target) * 100);
                 return (
-                  <div className={`goal-card ${goal.color === 'blue' ? 'gate' : ''}`} key={goal.id}>
+                  <div className={`goal-card ${goal.color === 'blue' ? 'gate' : ''} ${goal.color === 'purple' ? 'rolled-goal' : ''}`} key={goal.id}>
                     <div className="row" style={{ gap: 10 }}>
                       <button type="button" disabled={saving === goal.id || !user} className={`checkbox-button ${done ? 'checked' : ''}`} aria-pressed={done} onClick={() => toggleGoal(goal)}>
                         {done ? <Check size={18} /> : <span />}
@@ -1167,7 +1187,7 @@ function App() {
                       <div style={{ flex: 1 }}>
                         <div className="task-name" style={{ textDecoration: done ? 'line-through' : 'none', color: done ? 'var(--text-secondary)' : 'inherit' }}>{goal.title}</div>
                         <div className="mini-progress mt-8"><span style={{ width: pct + '%' }} /></div>
-                        <div className="small muted mt-8">{done ? 'Completed ✓' : `${goal.completed_units || 0}/${target} · ${pct}%`}</div>
+                        <div className="small muted mt-8">{done ? 'Completed ✓' : `${goal.completed_units || 0}/${target} · ${pct}%`}{goal.color === 'purple' ? ' · ↪ carried from last month' : ''}</div>
                       </div>
                     </div>
                   </div>
