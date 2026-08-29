@@ -1,0 +1,47 @@
+/* Mission reorder: only the dedicated handle can initiate vertical reordering. */
+.task-card {
+  pointer-events: none !important;
+}
+
+.task-card > * {
+  pointer-events: none !important;
+}
+
+.task-card .drag-handle,
+.task-card button {
+  pointer-events: auto !important;
+}
+
+.task-card .drag-handle {
+  display: inline-grid;
+  place-items: center;
+  min-width: 30px;
+  min-height: 30px;
+  margin-left: 6px;
+  padding: 4px 7px;
+  border: 1px solid #c7dff4;
+  border-radius: 8px;
+  background: #f4f9ff;
+  color: #55728f;
+  font-size: 1rem;
+  line-height: 1;
+  letter-spacing: -2px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.task-card .drag-handle:active {
+  cursor: grabbing;
+  background: #eaf2ff;
+}
+
+/* Keep the card visually stable while the handle is being held. */
+.task-card.reordering {
+  opacity: 1 !important;
+  border: 1px solid #c7dff4 !important;
+  transform: none !important;
+  background: #fff !important;
+  box-shadow: 0 8px 24px rgba(37,99,235,.08) !important;
+}
