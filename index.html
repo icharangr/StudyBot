@@ -9,6 +9,27 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      (() => {
+        const stripLeadingEmoji = node => {
+          if (!node || node.nodeType !== Node.TEXT_NODE) return;
+          const next = node.nodeValue.replace(/^(?:[\u{1F000}-\u{1FAFF}\u2600-\u27BF](?:\uFE0F|\u200D[\u{1F000}-\u{1FAFF}\u2600-\u27BF])*)+\s*/u, '');
+          if (next !== node.nodeValue) node.nodeValue = next;
+        };
+        const clean = root => {
+          if (!(root instanceof Element || root instanceof Document)) return;
+          root.querySelectorAll('.task-name').forEach(el => stripLeadingEmoji(el.firstChild));
+        };
+        const observer = new MutationObserver(mutations => {
+          mutations.forEach(m => m.addedNodes.forEach(node => {
+            if (node.nodeType === Node.TEXT_NODE) stripLeadingEmoji(node.parentElement?.matches?.('.task-name') ? node : null);
+            else clean(node);
+          }));
+        });
+        clean(document);
+        observer.observe(document.body, { childList: true, subtree: true });
+      })();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
