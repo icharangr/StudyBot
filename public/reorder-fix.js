@@ -20,51 +20,49 @@
       color: #7890aa;
       cursor: grab;
       touch-action: none !important;
+      -webkit-user-select: none;
+      user-select: none;
     }
     .drag-handle:active { cursor: grabbing; background: #edf5ff; }
     .task-card.reordering {
       opacity: .98 !important;
       border: 1px solid #9fc5ee !important;
-      transform: scale(1.012) !important;
       box-shadow: 0 12px 30px rgba(37,99,235,.14) !important;
-      transition: transform .18s cubic-bezier(.2,.8,.2,1), box-shadow .18s ease !important;
       z-index: 4;
     }
     .task-list > .task-swipe { transition: transform .22s cubic-bezier(.2,.8,.2,1), opacity .22s ease; }
   `;
   document.head.appendChild(style);
 
-  const handleTarget = target => target instanceof Element && !!target.closest('.drag-handle');
-  const cardTarget = target => target instanceof Element && !!target.closest('.task-card');
-
-  // The existing Mission component has native listeners on the whole card.
-  // Stop those listeners for normal card interaction; only the handle may start reorder.
-  const guard = event => {
-    if (cardTarget(event.target) && !handleTarget(event.target)) event.stopPropagation();
-  };
-  document.addEventListener('pointerdown', guard, true);
-  document.addEventListener('touchstart', guard, true);
-
-  // Smoothly lift and follow the card under the finger while the existing
-  // persistence logic swaps its position after each movement threshold.
+  // IMPORTANT: do not stop propagation on the whole card. React's delegated
+  // click handlers need the native touch/pointer sequence to produce a normal
+  // single tap. Reordering is isolated to the dedicated handle instead.
   let active = null;
   let startY = 0;
   let raf = 0;
   let latestY = 0;
+  let pointerId = null;
+
+  const isHandle = target => target instanceof Element && !!target.closest('.drag-handle');
+  const pointY = event => event.clientY ?? event.touches?.[0]?.clientY ?? 0;
 
   const down = event => {
-    if (!handleTarget(event.target)) return;
+    if (!isHandle(event.target)) return;
     const handle = event.target.closest('.drag-handle');
     const card = handle?.closest('.task-card');
     if (!card) return;
     active = card;
-    startY = event.clientY ?? event.touches?.[0]?.clientY ?? 0;
+    pointerId = event.pointerId ?? null;
+    startY = pointY(event);
     latestY = startY;
     card.style.willChange = 'transform';
+    card.classList.add('reordering');
   };
+
   const move = event => {
     if (!active) return;
-    latestY = event.clientY ?? event.touches?.[0]?.clientY ?? latestY;
+    if (pointerId !== null && event.pointerId !== undefined && event.pointerId !== pointerId) return;
+    latestY = pointY(event) || latestY;
     if (Math.abs(latestY - startY) < 3) return;
     if (!raf) raf = requestAnimationFrame(() => {
       raf = 0;
@@ -73,21 +71,24 @@
       active.style.setProperty('transform', `translate3d(0, ${delta}px) scale(1.012)`, 'important');
     });
   };
+
   const up = () => {
     if (!active) return;
     const card = active;
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     card.style.setProperty('transform', 'translate3d(0,0,0) scale(1)', 'important');
     card.style.removeProperty('will-change');
+    card.classList.remove('reordering');
     active = null;
+    pointerId = null;
   };
 
-  document.addEventListener('pointerdown', down, true);
-  document.addEventListener('pointermove', move, {capture:true, passive:false});
-  document.addEventListener('pointerup', up, true);
-  document.addEventListener('pointercancel', up, true);
-  document.addEventListener('touchstart', down, {capture:true, passive:true});
-  document.addEventListener('touchmove', move, {capture:true, passive:false});
-  document.addEventListener('touchend', up, true);
-  document.addEventListener('touchcancel', up, true);
+  document.addEventListener('pointerdown', down, { capture: true });
+  document.addEventListener('pointermove', move, { capture: true, passive: true });
+  document.addEventListener('pointerup', up, { capture: true });
+  document.addEventListener('pointercancel', up, { capture: true });
+  document.addEventListener('touchstart', down, { capture: true, passive: true });
+  document.addEventListener('touchmove', move, { capture: true, passive: true });
+  document.addEventListener('touchend', up, { capture: true });
+  document.addEventListener('touchcancel', up, { capture: true });
 })();
