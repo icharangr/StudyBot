@@ -65,6 +65,35 @@ function getIndiaTime() {
   }).format(new Date());
 }
 
+function normalizeMessage(value) {
+  if (typeof value === 'string') return value.trim() || 'Done.';
+  if (value == null) return 'Done.';
+  if (Array.isArray(value)) return value.map(v => typeof v === 'string' ? v : JSON.stringify(v)).join(' ');
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function parseModelJson(text) {
+  const cleaned = String(text || '')
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+  try { return JSON.parse(cleaned); } catch {}
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1));
+  throw new Error('AI returned invalid JSON');
+}
+
+function normalizeResult(result) {
+  const safe = result && typeof result === 'object' && !Array.isArray(result) ? result : {};
+  const operations = Array.isArray(safe.operations) ? safe.operations.filter(op => op && typeof op === 'object') : [];
+  return {
+    message: normalizeMessage(safe.message),
+    needs_confirmation: Boolean(safe.needs_confirmation),
+    operations,
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const { command, tasks = [], goals = [], today, availableHours = 6, dayStart = '06:00', routine = USER_ROUTINE } = req.body || {};
@@ -118,9 +147,7 @@ export default async function handler(req, res) {
     const d = await r.json();
     const text = d?.choices?.[0]?.message?.content;
     if (!text) return res.status(502).json({ error: 'Groq returned no output' });
-    const jsonText = text.replace(/^```json\s*/i, '').replace(/\s*```$/i, '').trim();
-    const result = JSON.parse(jsonText);
-    if (!Array.isArray(result.operations)) result.operations = [];
+    const result = normalizeResult(parseModelJson(text));
     return res.status(200).json(result);
   } catch (e) {
     return res.status(500).json({ error: `AI command failed: ${e.message}` });
