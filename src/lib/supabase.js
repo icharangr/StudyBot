@@ -1,71 +1,14 @@
 /* StudyBot app-level accounts backed by a shared Supabase database. No Supabase Auth is used. */
 const FUNCTION_URL='https://wvzigkbmlbyjfxpikqhh.supabase.co/functions/v1/studybot-sync';
-const SESSION_KEY='studybot-cloud-session-v1';
-let token=null;
-try { token=localStorage.getItem(SESSION_KEY); } catch { token=null; }
+const SESSION_KEY='studybot-cloud-session-v1',LEGACY_DB_KEY='studybot-app-db-v1',OLDER_DB_KEY='studybot-local-db-v2';
+let token=null;try{token=localStorage.getItem(SESSION_KEY);}catch{}
 const listeners=new Set();
-const emit=(event,session)=>listeners.forEach(cb=>cb(event,session));
-const request=async body=>{
-  const headers={'Content-Type':'application/json'};
-  if(token) headers.Authorization=`Bearer ${token}`;
-  const r=await fetch(FUNCTION_URL,{method:'POST',headers,body:JSON.stringify(body)});
-  const data=await r.json().catch(()=>({error:'Invalid server response'}));
-  if(!r.ok) return {data:null,error:{message:data.error||`Request failed (${r.status})`}};
-  return data;
-};
+const request=async body=>{const headers={'Content-Type':'application/json'};if(token)headers.Authorization=`Bearer ${token}`;const r=await fetch(FUNCTION_URL,{method:'POST',headers,body:JSON.stringify(body)});const data=await r.json().catch(()=>({error:'Invalid server response'}));if(!r.ok)return{data:null,error:{message:data.error||`Request failed (${r.status})`}};return data;};
 const saveToken=t=>{token=t||null;try{if(token)localStorage.setItem(SESSION_KEY,token);else localStorage.removeItem(SESSION_KEY);}catch{}};
-
-class RemoteQuery {
-  constructor(table){this.table=table;this.operation='select';this.values=null;this.filters=[];this.ordering=null;this.returnRows=false;this.columns='*';this.singleMode=false;this.maybeSingleMode=false;}
-  select(columns='*'){this.returnRows=true;this.columns=columns;return this;}
-  insert(values){this.operation='insert';this.values=values;return this;}
-  update(values){this.operation='update';this.values=values||{};return this;}
-  delete(){this.operation='delete';return this;}
-  upsert(values){this.operation='upsert';this.values=values;return this;}
-  eq(column,value){this.filters.push({column,op:'eq',value});return this;}
-  lt(column,value){this.filters.push({column,op:'lt',value});return this;}
-  lte(column,value){this.filters.push({column,op:'lte',value});return this;}
-  gt(column,value){this.filters.push({column,op:'gt',value});return this;}
-  gte(column,value){this.filters.push({column,op:'gte',value});return this;}
-  order(column,options={}){this.ordering={column,ascending:options.ascending!==false};return this;}
-  single(){this.singleMode=true;return this;}
-  maybeSingle(){this.maybeSingleMode=true;return this;}
-  then(resolve,reject){return this.execute().then(resolve,reject);}
-  catch(reject){return this.execute().catch(reject);}
-  async execute(){
-    return request({kind:'query',table:this.table,operation:this.operation,values:this.values,filters:this.filters,order:this.ordering,columns:this.columns,returnRows:this.returnRows,single:this.singleMode,maybeSingle:this.maybeSingleMode});
-  }
-}
-
-async function signUpWithPasscode(identifier,passcode){
-  const result=await request({kind:'auth',action:'signup',identifier,passcode});
-  if(result.error)return result;
-  saveToken(result.session?.access_token);
-  emit('SIGNED_IN',result.session);
-  return result;
-}
-async function signInWithPasscode(identifier,passcode){
-  const result=await request({kind:'auth',action:'signin',identifier,passcode});
-  if(result.error)return result;
-  saveToken(result.session?.access_token);
-  emit('SIGNED_IN',result.session);
-  return result;
-}
-async function getSession(){
-  if(!token)return {data:{session:null},error:null};
-  const result=await request({kind:'auth',action:'session'});
-  if(result.error){saveToken(null);return {data:{session:null},error:null};}
-  return result;
-}
-
-export const supabase={
-  __localMode:false,
-  from:table=>new RemoteQuery(table),
-  auth:{
-    getSession,
-    signUpWithPasscode,
-    signInWithPasscode,
-    onAuthStateChange:callback=>{listeners.add(callback);queueMicrotask(async()=>{const result=await getSession();callback?.(result.data?.session?'SIGNED_IN':'SIGNED_OUT',result.data?.session||null);});return{data:{subscription:{unsubscribe:()=>listeners.delete(callback)}}};},
-    signOut:async()=>{const result=await request({kind:'auth',action:'signout'});saveToken(null);emit('SIGNED_OUT',null);return result;},
-  },
-};
+class RemoteQuery{constructor(table){this.table=table;this.operation='select';this.values=null;this.filters=[];this.ordering=null;this.returnRows=false;this.columns='*';this.singleMode=false;this.maybeSingleMode=false;}select(columns='*'){this.returnRows=true;this.columns=columns;return this;}insert(values){this.operation='insert';this.values=values;return this;}update(values){this.operation='update';this.values=values||{};return this;}delete(){this.operation='delete';return this;}upsert(values){this.operation='upsert';this.values=values;return this;}eq(column,value){this.filters.push({column,op:'eq',value});return this;}lt(column,value){this.filters.push({column,op:'lt',value});return this;}lte(column,value){this.filters.push({column,op:'lte',value});return this;}gt(column,value){this.filters.push({column,op:'gt',value});return this;}gte(column,value){this.filters.push({column,op:'gte',value});return this;}order(column,options={}){this.ordering={column,ascending:options.ascending!==false};return this;}single(){this.singleMode=true;return this;}maybeSingle(){this.maybeSingleMode=true;return this;}then(resolve,reject){return this.execute().then(resolve,reject);}catch(reject){return this.execute().catch(reject);}async execute(){return request({kind:'query',table:this.table,operation:this.operation,values:this.values,filters:this.filters,order:this.ordering,columns:this.columns,returnRows:this.returnRows,single:this.singleMode,maybeSingle:this.maybeSingleMode});}}
+async function migrateLocal(identifier,passcode){try{const raw=localStorage.getItem(LEGACY_DB_KEY)||localStorage.getItem(OLDER_DB_KEY);if(!raw)return null;const db=JSON.parse(raw),users=Object.values(db.users||{}),u=users.find(x=>String(x.identifier||'').trim().toLowerCase()===String(identifier||'').trim().toLowerCase());if(!u)return null;const account=db.accounts?.[u.id];if(!account)return null;const created=await request({kind:'auth',action:'signup',identifier,passcode});if(created.error)return null;saveToken(created.session?.access_token);const tasks=(account.tasks||[]).map(t=>({title:t.title,task_date:t.task_date||new Date().toISOString().slice(0,10),scheduled_time:t.scheduled_time||null,end_time:t.end_time||null,duration_minutes:Number(t.duration_minutes)||25,tag:t.tag||'Personal',priority:t.priority||'Medium',done:!!t.done,completed_at:t.completed_at||null,source:t.source||'manual',goal_id:t.goal_id||null,units:Number(t.units||1),notes:t.notes||null,focus_seconds:Number(t.focus_seconds||0)}));if(tasks.length)await request({kind:'query',table:'tasks',operation:'insert',values:tasks});const goals=(account.monthly_goals||[]).map(g=>({month_start:g.month_start,title:g.title,category:g.category||null,target_units:Number(g.target_units||1),completed_units:Number(g.completed_units||0),deadline:g.deadline||null,next_action:g.next_action||null,progress:Number(g.progress||0),color:g.color||'blue'}));if(goals.length)await request({kind:'query',table:'monthly_goals',operation:'insert',values:goals});const sessions=(account.study_sessions||[]).map(s=>({started_at:s.started_at||new Date().toISOString(),ended_at:s.ended_at||null,minutes:Number(s.minutes||0),subject:s.subject||null}));if(sessions.length)await request({kind:'query',table:'study_sessions',operation:'insert',values:sessions});if(u.dayStart||u.timezone)await request({kind:'query',table:'profiles',operation:'update',values:{day_start:u.dayStart||'06:00',timezone:u.timezone||'Asia/Kolkata'}});return created;}catch{return null;}}
+async function signUpWithPasscode(identifier,passcode){let result=await request({kind:'auth',action:'signup',identifier,passcode});if(result.error&&/already exists/i.test(result.error.message)){return signInWithPasscode(identifier,passcode);}if(result.error)return result;saveToken(result.session?.access_token);emit('SIGNED_IN',result.session);return result;}
+async function signInWithPasscode(identifier,passcode){let result=await request({kind:'auth',action:'signin',identifier,passcode});if(result.error&&/account not found/i.test(result.error.message)){const migrated=await migrateLocal(identifier,passcode);if(migrated)return migrated;}if(result.error)return result;saveToken(result.session?.access_token);emit('SIGNED_IN',result.session);return result;}
+async function getSession(){if(!token)return{data:{session:null},error:null};const result=await request({kind:'auth',action:'session'});if(result.error){saveToken(null);return{data:{session:null},error:null};}return result;}
+function emit(event,session){listeners.forEach(cb=>cb(event,session));}
+export const supabase={__localMode:false,from:table=>new RemoteQuery(table),auth:{getSession,signUpWithPasscode,signInWithPasscode,onAuthStateChange:callback=>{listeners.add(callback);queueMicrotask(async()=>{const result=await getSession();callback?.(result.data?.session?'SIGNED_IN':'SIGNED_OUT',result.data?.session||null);});return{data:{subscription:{unsubscribe:()=>listeners.delete(callback)}}};},signOut:async()=>{const result=await request({kind:'auth',action:'signout'});saveToken(null);emit('SIGNED_OUT',null);return result;}}};
