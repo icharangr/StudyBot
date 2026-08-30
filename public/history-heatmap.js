@@ -6,6 +6,7 @@
   const MONTH_ID = 'studybot-monthly-history';
   let cache = [];
   let lastLoad = 0;
+  let rendering = false;
 
   const pad = n => String(n).padStart(2, '0');
   const dateKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -147,19 +148,37 @@
   }
 
   async function render() {
+    if (rendering) return;
+    rendering = true;
     ensureStyles();
     const tab=activeTab();
     const week=document.getElementById(WEEK_ID); const month=document.getElementById(MONTH_ID);
     if(tab!=='today') week?.remove();
     if(tab!=='goals') month?.remove();
-    if(tab!=='today'&&tab!=='goals') return;
-    if(Date.now()-lastLoad>15000){try{cache=await queryTasks();lastLoad=Date.now();}catch(e){const target=tab==='today'?WEEK_ID:MONTH_ID;const mount=document.getElementById(target);if(mount)mount.innerHTML='<div class="empty-state">Could not load history right now.</div>';return;}}
+    if(tab!=='today'&&tab!=='goals'){rendering=false;return;}
+    if(Date.now()-lastLoad>15000){try{cache=await queryTasks();lastLoad=Date.now();}catch(e){const target=tab==='today'?WEEK_ID:MONTH_ID;const mount=document.getElementById(target);if(mount)mount.innerHTML='<div class="empty-state">Could not load history right now.</div>';rendering=false;return;}}
     const byDay=grouped(cache);
     if(tab==='today'){const mount=place(WEEK_ID,'mission list',true);if(mount)buildWeekly(mount,byDay);}
     if(tab==='goals'){const mount=place(MONTH_ID,'monthly goals',true);if(mount)buildMonthly(mount,byDay);}
+    rendering=false;
   }
 
-  const observer=new MutationObserver(()=>{if(!window.__studybotHistoryScheduled){window.__studybotHistoryScheduled=true;requestAnimationFrame(()=>{window.__studybotHistoryScheduled=false;render();});}});
+  const observer=new MutationObserver(mutations=>{
+    if(rendering || window.__studybotHistoryScheduled) return;
+    // Do not react to our own heatmap DOM mutations. The previous observer
+    // watched the whole document and continuously re-rendered the heatmap,
+    // which could make iOS touch/click handling feel like it required two taps.
+    const relevant=mutations.some(m=>{
+      if(m.target instanceof Element && m.target.closest('.sb-history-card,.sb-history-modal')) return false;
+      return [...m.addedNodes,...m.removedNodes].some(n=>{
+        if(!(n instanceof Element)) return true;
+        return !n.matches(`#${WEEK_ID},#${MONTH_ID},.sb-history-modal`) && !n.closest('.sb-history-card,.sb-history-modal');
+      });
+    });
+    if(!relevant) return;
+    window.__studybotHistoryScheduled=true;
+    requestAnimationFrame(()=>{window.__studybotHistoryScheduled=false;render();});
+  });
   observer.observe(document.body,{childList:true,subtree:true});
   setInterval(()=>render(),15000);
   render();
